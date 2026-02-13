@@ -374,3 +374,77 @@ export const assignAllUserAddresses = action({
     return addresses;
   },
 }) as any;
+
+export const updateLastDepositCheck = mutation({
+  args: {
+    userId: v.id("user"),
+    timestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Update the user's lastDepositCheck field
+    await ctx.db.patch(args.userId, {
+      lastDepositCheck: args.timestamp,
+    });
+
+    console.log(`✅ Updated lastDepositCheck for user ${args.userId}: ${new Date(args.timestamp).toISOString()}`);
+    
+    return {
+      userId: args.userId,
+      timestamp: args.timestamp,
+      updatedAt: Date.now(),
+    };
+  },
+});
+
+/**
+ * Get all users with deposit addresses (needed for polling service)
+ */
+export const getAllUsersWithDepositAddresses = query({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("user").collect();
+    
+    // Filter users who have at least one deposit address
+    const usersWithAddresses = users.filter(user => {
+      const addresses = user.depositAddresses;
+      return addresses && (
+        addresses.trc20 || 
+        addresses.bep20 || 
+        addresses.erc20 || 
+        addresses.polygon
+      );
+    });
+    
+    console.log(`📊 Found ${usersWithAddresses.length} users with deposit addresses`);
+    
+    return usersWithAddresses;
+  },
+});
+
+/**
+ * Get user's last deposit check timestamp
+ */
+export const getLastDepositCheck = query({
+  args: { userId: v.id("user") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    
+    if (!user) {
+      return null;
+    }
+    
+    return {
+      userId: args.userId,
+      lastDepositCheck: user.lastDepositCheck || 0,
+      lastCheckDate: user.lastDepositCheck 
+        ? new Date(user.lastDepositCheck).toISOString() 
+        : null,
+    };
+  },
+});

@@ -29,6 +29,7 @@ export default defineSchema({
       erc20: v.optional(v.string()),
       polygon: v.optional(v.string()),
     })),
+    lastDepositCheck: v.optional(v.number()),
     invitationExpiry: v.optional(v.number()),
     referredBy: v.optional(v.id("user")),
     

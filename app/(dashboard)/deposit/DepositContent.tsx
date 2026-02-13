@@ -1,355 +1,340 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { useSession } from 'next-auth/react';
-import { useUser } from '@clerk/nextjs';
-import { useQuery, useAction } from 'convex/react';
-import { api } from '@/convex/_generated/api';
-import QRCode from 'qrcode';
-import { getDepositAddress, formatAddressForDisplay } from '@/lib/depositAddresses';
-import toast from 'react-hot-toast';
+import React, { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import QRCode from "qrcode";
+import toast from "react-hot-toast";
+import { DepositCard } from "./_components/DepositCard";
+import { NetworkSelector } from "./_components/NetworkSelector";
+import { DepositHeader } from "./_components/DepositHeader";
+import { TeamSection } from "./_components/TeamSection";
+import { useDepositAddress } from "@/lib/hooks/useDepositAddress";
+
+// Define auth states as constants
+const AUTH_STATE = {
+  LOADING: "loading",
+  AUTHENTICATED: "authenticated",
+  UNAUTHENTICATED: "unauthenticated",
+} as const;
 
 export default function DepositContent() {
   const { data: session, status } = useSession();
-  const { isLoaded: clerkLoaded, isSignedIn: clerkSignedIn, user } = useUser();
-  
-  // Call all hooks unconditionally at the top
-  const [selectedNetwork, setSelectedNetwork] = useState('trc20');
+
+  // Deposit state
+  const [selectedNetwork, setSelectedNetwork] = useState<
+    "trc20" | "bep20" | "erc20" | "polygon"
+  >("trc20");
   const [copied, setCopied] = useState(false);
-  const [qrSrc, setQrSrc] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [userAddress, setUserAddress] = useState<string>('');
-  
-  // Test transfer state
-  const [testTransferRecipient, setTestTransferRecipient] = useState('');
-  const [testTransferAmount, setTestTransferAmount] = useState('0.01');
-  const [testTransferLoading, setTestTransferLoading] = useState(false);
-  const [testTransferResult, setTestTransferResult] = useState<any>(null);
+  const [qrSrc, setQrSrc] = useState("");
 
-  // Get userId for team report query
-  const userId = (session as any)?.user?.id;
-  const teamReport = useQuery(api.team.getTeamReport, userId ? { userId } : "skip");
-  const userAddresses = useQuery(api.user.getUserAddresses, userId ? { userId } : "skip");
-  const getOrAssignAddress = useAction(api.user.getOrAssignUserAddress);
-  const userName = session?.user?.name?.split(" ")[0] || "You";
+  // Convex queries
+  const user = useQuery(
+    api.user.getUserByContact,
+    session?.user?.contact ? { contact: session.user.contact } : "skip"
+  );
 
-  // Consider auth loading only when BOTH providers are still initializing.
-  // This way if either provider reports an authenticated user we proceed.
-  const authLoading = status === 'loading' && !clerkLoaded;
+  const teamReport = useQuery(
+    api.team.getTeamReport,
+    user?._id ? { userId: user._id } : "skip"
+  );
 
-  const signedIn = clerkSignedIn || (status === 'authenticated' && !!session?.user);
+  // Use the deposit address hook
+  const { depositAddresses, generating, generateAddress } = useDepositAddress({
+    userId: user?._id,
+  });
 
-  // Define networks and other constants (keys match lib/depositAddresses)
-  const networks = [
-    { id: 'trc20', label: 'Tron•TRC20 [USDT/TRX]' },
-    { id: 'bep20', label: 'BNB•BEP20 [USDT/USDC]' },
-    { id: 'erc20', label: 'Ethereum•ERC20 [USDT/USDC]' },
-    { id: 'polygon', label: 'Polygon•ERC20 [USDT/USDC]' },
-  ];
+  // Get current address for selected network
+  const currentAddress = useMemo(() => {
+    return depositAddresses?.[selectedNetwork] || "";
+  }, [depositAddresses, selectedNetwork]);
 
-  // Fetch or generate user's address for selected network
-  useEffect(() => {
-    if (!userId || !signedIn) return;
-    
-    const fetchAddress = async () => {
-      try {
-        setLoading(true);
-        // Check if we already have this address stored
-        if (userAddresses && userAddresses[selectedNetwork]) {
-          setUserAddress(userAddresses[selectedNetwork]);
-        } else {
-          // Generate new address for this network
-          const address = await getOrAssignAddress({ userId, network: selectedNetwork });
-          setUserAddress(address);
-        }
-      } catch (error) {
-        console.error("Failed to get/assign user address:", error);
-        setUserAddress('');
-      } finally {
-        setLoading(false);
-      }
+  // ROBUST AUTH STATE LOGIC
+  const authState = useMemo(() => {
+    if (status === "loading") {
+      return AUTH_STATE.LOADING;
+    }
+
+    if (status === "unauthenticated" || !session) {
+      return AUTH_STATE.UNAUTHENTICATED;
+    }
+
+    if (user === undefined) {
+      return AUTH_STATE.LOADING;
+    }
+
+    if (!user || !user._id) {
+      return AUTH_STATE.UNAUTHENTICATED;
+    }
+
+    return AUTH_STATE.AUTHENTICATED;
+  }, [status, session, user]);
+
+  // Define networks
+  const networks = useMemo(
+    () => [
+      { id: "trc20", label: "Tron•TRC20 [USDT/TRX]" },
+      { id: "bep20", label: "BNB•BEP20 [USDT/USDC]" },
+      { id: "erc20", label: "Ethereum•ERC20 [USDT/USDC]" },
+      { id: "polygon", label: "Polygon•ERC20 [USDT/USDC]" },
+    ],
+    []
+  );
+
+  // Get deposit info based on network
+  const depositInfo = useMemo(() => {
+    const infoMap = {
+      trc20: {
+        network: "Tron (TRC20)",
+        token: "USDT / TRX",
+        minDeposit: 10,
+      },
+      bep20: {
+        network: "BNB Chain (BEP20)",
+        token: "USDT / USDC",
+        minDeposit: 10,
+      },
+      erc20: {
+        network: "Ethereum (ERC20)",
+        token: "USDT / USDC",
+        minDeposit: 50,
+      },
+      polygon: {
+        network: "Polygon",
+        token: "USDT / USDC",
+        minDeposit: 10,
+      },
     };
 
-    fetchAddress();
-  }, [userId, selectedNetwork, signedIn, userAddresses, getOrAssignAddress]);
+    return infoMap[selectedNetwork];
+  }, [selectedNetwork]);
 
-  const depositInfo = getDepositAddress(selectedNetwork as any) || { address: '', token: 'USDT', minDeposit: 0, network: '' };
-  const shortAddress = formatAddressForDisplay(userAddress, 8);
+  // Format address for display
+  const shortAddress = useMemo(() => {
+    if (!currentAddress) return "";
+    const start = currentAddress.slice(0, 8);
+    const end = currentAddress.slice(-8);
+    return `${start}...${end}`;
+  }, [currentAddress]);
 
-  // useEffect for QR code generation
+  // Generate address when network changes and no address exists
+  useEffect(() => {
+    if (
+      authState === AUTH_STATE.AUTHENTICATED &&
+      user?._id &&
+      !currentAddress &&
+      !generating
+    ) {
+      // Auto-generate address for the selected network
+      generateAddress(selectedNetwork);
+    }
+  }, [authState, user?._id, currentAddress, generating, selectedNetwork, generateAddress]);
+
+  // QR Code generation effect
   useEffect(() => {
     let mounted = true;
-    if (userAddress) {
-      QRCode.toDataURL(userAddress, { errorCorrectionLevel: 'H' })
-        .then((url) => {
-          if (mounted) setQrSrc(url);
-        })
-        .catch(() => {
-          if (mounted) setQrSrc('');
-        });
-    }
-    return () => { mounted = false; };
-  }, [userAddress, selectedNetwork]);
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(userAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (e) {
-      // ignore
-    }
-  };
-
-  const handleTestTransfer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!testTransferRecipient || !testTransferAmount) {
-      toast.error('Please fill in recipient address and amount');
+    if (!currentAddress) {
+      setQrSrc("");
       return;
     }
 
-    try {
-      setTestTransferLoading(true);
-      const response = await fetch('/api/test-transfer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          recipientAddress: testTransferRecipient,
-          amountEth: parseFloat(testTransferAmount),
-        }),
+    QRCode.toDataURL(currentAddress, { errorCorrectionLevel: "H" })
+      .then((url) => {
+        if (mounted) setQrSrc(url);
+      })
+      .catch((error) => {
+        console.error("QR generation failed:", error);
+        if (mounted) setQrSrc("");
       });
 
-      const data = await response.json();
+    return () => {
+      mounted = false;
+    };
+  }, [currentAddress]);
 
-      if (!response.ok || data.error) {
-        toast.error(data.error || 'Transfer failed');
-        setTestTransferResult(null);
-        return;
-      }
+  // Copy address handler
+  const handleCopy = async () => {
+    if (!currentAddress) return;
 
-      setTestTransferResult(data);
-      toast.success('Transfer initiated! Check Etherscan for details.');
-      setTestTransferRecipient('');
-      setTestTransferAmount('0.01');
+    try {
+      await navigator.clipboard.writeText(currentAddress);
+      setCopied(true);
+      toast.success("Address copied to clipboard!");
+      setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      toast.error('Transfer request failed');
-      console.error('Test transfer error:', error);
-    } finally {
-      setTestTransferLoading(false);
+      toast.error("Failed to copy address");
+      console.error("Copy failed:", error);
     }
   };
 
-  // Early returns after all hooks are called
-  if (authLoading) {
+  // Handle network change
+  const handleNetworkChange = (networkId: string) => {
+    setSelectedNetwork(networkId as "trc20" | "bep20" | "erc20" | "polygon");
+  };
+
+  // Handle manual address generation (optional button)
+  const handleGenerateAddress = async () => {
+    await generateAddress(selectedNetwork);
+  };
+
+  const userName = user?.fullname || "User";
+
+  // Loading State
+  if (authState === AUTH_STATE.LOADING) {
     return (
-      <main className="font-montserrat text-gray-800 overflow-x-hidden bg-white min-h-screen flex items-center justify-center">
-        <div className="max-w-lg text-center p-8 bg-white rounded-2xl shadow-lg">
-          <div>Loading authentication...</div>
-        </div>
-      </main>
-    );
-  }
-
-  if (!signedIn) {
-    return (
-      <main className="font-montserrat text-gray-800 overflow-x-hidden bg-white min-h-screen flex items-center justify-center">
-        <div className="max-w-lg text-center p-8 bg-white rounded-2xl shadow-lg">
-          <h2 className="text-2xl font-bold mb-4">Sign in to Deposit Funds</h2>
-          <p className="text-gray-600 mb-6">You must be signed in to add funds to your ANDES account.</p>
-          <div className="flex gap-4 justify-center">
-            <Link href="/sign-in" className="px-6 py-2 bg-cyan-600 text-white rounded-md">Sign in</Link>
-            <Link href="/register" className="px-6 py-2 bg-gray-100 text-gray-800 rounded-md">Register</Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="font-montserrat text-gray-800 bg-gradient-to-br from-green-300 via-cyan-200 to-white min-h-screen flex items-start justify-center pt-6 px-4 pb-28">
-      <div className="w-full max-w-md space-y-6">
-        {/* Team Pyramid Section */}
-        {teamReport && (
-          <div className="bg-white/80 backdrop-blur-sm rounded-3xl p-6 shadow-lg">
-            <h2 className="text-lg font-bold text-gray-900 mb-6 text-center">Team Structure</h2>
-            
-            <div className="flex flex-col items-center space-y-3">
-              {/* YOU - Top */}
-              <div>
-                <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-2xl px-6 py-3 text-center shadow-lg min-w-32">
-                  <div className="font-bold text-sm">{userName}</div>
-                  <div className="text-xs opacity-90">(YOU)</div>
-                </div>
-              </div>
-
-              {/* Arrow Down */}
-              <div className="text-2xl text-gray-400 font-light">↓</div>
-
-              {/* TEAM A - Level 1 */}
-              <div className="w-full max-w-xs">
-                <div className="bg-gradient-to-r from-green-400 to-emerald-500 text-white rounded-2xl px-6 py-4 text-center shadow-lg border-2 border-green-300">
-                  <div className="text-2xl font-bold">{teamReport.levels.A.count}</div>
-                  <div className="text-sm font-semibold mt-1">TEAM A</div>
-                  <div className="text-xs opacity-90 mt-1">(Your Referrals)</div>
-                  <div className="text-sm font-bold mt-2 bg-white/20 rounded px-2 py-1 inline-block">18% Commission</div>
-                </div>
-              </div>
-
-              {/* Arrow Down */}
-              <div className="text-2xl text-gray-400 font-light">↓</div>
-
-              {/* TEAM B - Level 2 */}
-              <div className="w-full max-w-sm">
-                <div className="bg-gradient-to-r from-teal-400 to-cyan-500 text-white rounded-2xl px-6 py-4 text-center shadow-lg border-2 border-teal-300">
-                  <div className="text-2xl font-bold">{teamReport.levels.B.count}</div>
-                  <div className="text-sm font-semibold mt-1">TEAM B</div>
-                  <div className="text-xs opacity-90 mt-1">(Their Referrals)</div>
-                  <div className="text-sm font-bold mt-2 bg-white/20 rounded px-2 py-1 inline-block">3% Commission</div>
-                </div>
-              </div>
-
-              {/* Arrow Down */}
-              <div className="text-2xl text-gray-400 font-light">↓</div>
-
-              {/* TEAM C - Level 3 */}
-              <div className="w-full max-w-md">
-                <div className="bg-gradient-to-r from-blue-400 to-indigo-500 text-white rounded-2xl px-6 py-4 text-center shadow-lg border-2 border-blue-300">
-                  <div className="text-2xl font-bold">{teamReport.levels.C.count}</div>
-                  <div className="text-sm font-semibold mt-1">TEAM C</div>
-                  <div className="text-xs opacity-90 mt-1">(Their Referrals)</div>
-                  <div className="text-sm font-bold mt-2 bg-white/20 rounded px-2 py-1 inline-block">2% Commission</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Deposit Section Header */}
-        <div>
-          <header className="mb-4">
+      <main className="font-montserrat bg-gradient-to-br from-green-300 via-cyan-200 to-white min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center p-8 bg-white/90 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20">
+          <div className="flex flex-col items-center gap-6">
             <div className="relative">
-              <div className="absolute left-0 top-0">
-                <Link href="/dashboard" className="text-white text-xl px-3">←</Link>
-              </div>
-              <div className="flex items-center justify-center">
-                <div className="bg-gradient-to-r from-green-400 to-cyan-400 rounded-full px-6 py-2 shadow-md">
-                  <h3 className="text-white font-semibold">USDT</h3>
-                </div>
-              </div>
-              <div className="absolute right-0 top-0 px-3 py-1">
-                <div className="flex items-center gap-1">
-                  <div className="w-2 h-2 bg-white rounded-full opacity-70"></div>
-                  <div className="w-2 h-2 bg-white rounded-full opacity-70"></div>
-                  <div className="w-2 h-2 bg-white rounded-full opacity-70"></div>
-                </div>
-              </div>
+              <div className="w-16 h-16 border-4 border-cyan-200 rounded-full"></div>
+              <div className="w-16 h-16 border-4 border-cyan-600 border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
             </div>
-          </header>
-        </div>
 
-        <div className="bg-blue-500 rounded-xl p-3 shadow-lg">
-          <div className="p-3 space-y-3">
-            {networks.map((n) => (
-              <button
-                key={n.id}
-                onClick={() => setSelectedNetwork(n.id)}
-                className={`w-full text-center px-4 py-3 rounded-md ${selectedNetwork === n.id ? 'bg-white text-gray-900' : 'bg-white/90 text-gray-800'} text-sm font-medium shadow-sm`}
-              >
-                {n.label}
-              </button>
-            ))}
-          </div>
-        </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-semibold text-gray-800">
+                Loading Your Account
+              </h3>
+              <p className="text-sm text-gray-600">
+                Please wait while we verify your session...
+              </p>
+            </div>
 
-        <div className="mt-6 flex justify-center">
-          <div className="bg-white rounded-xl p-4 shadow-2xl">
-            <div className="w-56 h-56 bg-white rounded-lg flex items-center justify-center">
-              {loading ? (
-                <div className="text-gray-400 text-center">
-                  <div className="text-2xl mb-2">⏳</div>
-                  <div className="text-sm">Generating address...</div>
-                </div>
-              ) : (
-                <img src={qrSrc || '/garelly1.jfif'} alt="QR" className="w-48 h-48 object-cover" />
-              )}
-            </div>
-            <div className="mt-4 relative flex items-center">
-              <div className="text-sm text-gray-700 truncate pr-12">
-                {loading ? 'Generating...' : shortAddress || 'No address available'}
-              </div>
-              <button 
-                onClick={handleCopy} 
-                disabled={loading || !userAddress}
-                className="absolute right-0 top-0 -mt-1 w-12 h-12 flex items-center justify-center rounded-full border-2 border-cyan-500 text-cyan-600 bg-white shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {copied ? '✓' : 'Copy'}
-              </button>
-            </div>
-            <div className="w-full mt-4 text-xs text-gray-700 space-y-2">
-              <p className="leading-5 bg-blue-50 p-2 rounded border border-blue-200">
-                <span className="font-semibold text-blue-700">💡 Your Personal Address:</span> This is your unique deposit address on {depositInfo.network}. Use this address to receive deposits.
-              </p>
-              <p className="leading-5">
-                <span className="font-semibold text-cyan-700">1. The minimum deposit amount is {depositInfo.minDeposit} {depositInfo.token}.</span> If the deposit amount is lower than the minimum, the deposit will not be credited.
-              </p>
-              <p className="text-xs text-gray-600">Network: {depositInfo.network}</p>
+            <div className="flex gap-2">
+              <div
+                className="w-2 h-2 bg-cyan-600 rounded-full animate-bounce"
+                style={{ animationDelay: "0ms" }}
+              ></div>
+              <div
+                className="w-2 h-2 bg-cyan-600 rounded-full animate-bounce"
+                style={{ animationDelay: "150ms" }}
+              ></div>
+              <div
+                className="w-2 h-2 bg-cyan-600 rounded-full animate-bounce"
+                style={{ animationDelay: "300ms" }}
+              ></div>
             </div>
           </div>
         </div>
+      </main>
+    );
+  }
 
-        {/* Ethereum Test Transfer Section */}
-        {selectedNetwork === 'erc20' && (
-          <div className="bg-white rounded-xl p-6 shadow-lg">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">🧪 Test Ethereum Transfer</h3>
-            <p className="text-xs text-gray-600 mb-4">Send test ETH on Sepolia testnet (requires TESTNET_PRIVATE_KEY configured)</p>
-            
-            <form onSubmit={handleTestTransfer} className="space-y-3">
-              <input
-                type="text"
-                placeholder="Recipient address (0x...)"
-                value={testTransferRecipient}
-                onChange={(e) => setTestTransferRecipient(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+  // Unauthenticated State
+  if (authState === AUTH_STATE.UNAUTHENTICATED) {
+    return (
+      <main className="font-montserrat bg-gradient-to-br from-green-300 via-cyan-200 to-white min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-lg w-full text-center p-8 bg-white/90 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20">
+          <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-full flex items-center justify-center">
+            <svg
+              className="w-10 h-10 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
               />
-              
-              <input
-                type="number"
-                placeholder="Amount (ETH)"
-                value={testTransferAmount}
-                onChange={(e) => setTestTransferAmount(e.target.value)}
-                min="0.001"
-                step="0.001"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              
-              <button
-                type="submit"
-                disabled={testTransferLoading}
-                className="w-full px-4 py-2 bg-blue-500 text-white rounded-md text-sm font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {testTransferLoading ? '⏳ Sending...' : '📤 Send Test ETH'}
-              </button>
-            </form>
+            </svg>
+          </div>
 
-            {testTransferResult && (
-              <div className="mt-4 p-3 bg-green-50 border border-green-300 rounded-md">
-                <p className="text-xs font-semibold text-green-700 mb-2">✅ Transfer Successful</p>
-                <p className="text-xs text-gray-700 mb-1"><span className="font-semibold">Tx Hash:</span> {testTransferResult.transactionHash}</p>
-                <p className="text-xs text-gray-700 mb-1"><span className="font-semibold">Amount:</span> {testTransferResult.message}</p>
-                <a
-                  href={testTransferResult.explorerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:underline font-semibold mt-2 inline-block"
+          <h2 className="text-2xl font-bold text-gray-800 mb-3">
+            Authentication Required
+          </h2>
+
+          <p className="text-gray-600 mb-8 leading-relaxed">
+            You need to be signed in to access deposit features and manage your
+            ANDES account.
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link
+              href="/sign-in"
+              className="px-8 py-3 bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-700 hover:to-cyan-800 text-white font-semibold rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105"
+            >
+              Sign In
+            </Link>
+            <Link
+              href="/register"
+              className="px-8 py-3 bg-white hover:bg-gray-50 text-gray-800 font-semibold rounded-lg border-2 border-gray-200 hover:border-gray-300 transition-all duration-200 transform hover:scale-105"
+            >
+              Create Account
+            </Link>
+          </div>
+
+          <p className="text-sm text-gray-500 mt-6">
+            New to ANDES?{" "}
+            <Link
+              href="/about"
+              className="text-cyan-600 hover:text-cyan-700 font-medium"
+            >
+              Learn more
+            </Link>
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // Authenticated State - Show main content
+  return (
+    <main className="bg-gradient-to-br from-green-300 via-cyan-200 to-white min-h-screen px-4 py-8">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-6 animate-fade-in">
+          <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">
+            Welcome back, {userName}! 👋
+          </h1>
+          <p className="text-gray-600">
+            Manage your deposits and track your team performance
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* LEFT COLUMN - Team Section */}
+          <div className="space-y-6 animate-slide-in-left">
+            {teamReport && (
+              <TeamSection teamReport={teamReport} userName={userName} />
+            )}
+          </div>
+
+          {/* RIGHT COLUMN - Deposit Section */}
+          <div className="lg:col-span-2 space-y-6 animate-slide-in-right">
+            <DepositHeader />
+
+            <NetworkSelector
+              networks={networks}
+              selected={selectedNetwork}
+              onSelect={handleNetworkChange}
+            />
+
+            <DepositCard
+              loading={generating}
+              qrSrc={qrSrc}
+              shortAddress={shortAddress}
+              userAddress={currentAddress}
+              copied={copied}
+              onCopy={handleCopy}
+              depositInfo={depositInfo}
+            />
+
+            {/* Optional: Manual regenerate button */}
+            {!generating && currentAddress && (
+              <div className="text-center">
+                <button
+                  onClick={handleGenerateAddress}
+                  className="text-sm text-cyan-600 hover:text-cyan-700 font-medium underline"
                 >
-                  View on Etherscan ↗
-                </a>
+                  Generate New Address
+                </button>
               </div>
             )}
           </div>
-        )}
+        </div>
       </div>
     </main>
   );
