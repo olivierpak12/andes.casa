@@ -1,72 +1,62 @@
 "use client";
 
-import { useAction } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import React, { useState } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { toastSuccess, toastError } from "@/lib/clientToast";
 import { Button } from "@/components/ui/button";
-import { generateVerificationCode } from "@/lib/utils";
-import { useRouter } from "next/navigation";
-import crypto from "crypto";
 import { Loader } from "lucide-react";
-
-export function generateSecureToken(length = 48) {
-  return crypto.randomBytes(length).toString("hex");
-}
+import Link from "next/link";
 
 const ForgotPasswordPage = () => {
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [usingPhone, setUsingPhone] = useState(false);
-  const [checkOTP, setCheckOTP] = useState(false);
-  const [OTP, setOTP] = useState<number>();
-  // TODO: Re-enable after Convex API is properly configured
-  // const checkUserByEmail = useAction(api.user.checkUserByEmail);
-  // const updateUserInDb = useAction(api.user.updateUserInDb);
-  // const checkUserByPhone = useAction(api.user.checkUserByContact);
-
   const router = useRouter();
 
-  const handleVerify = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!OTP || String(OTP).length !== 4) {
-      setError("Please enter a valid 4-digit OTP.");
-      return;
-    }
-    // Add OTP verification logic here
-    toastSuccess("OTP verified successfully! (Placeholder)", {
-      richColors: true,
-    });
-    setSubmitted(true);
-    setLoading(false);
-  };
-
-  const validateInput = () => {
-    if (usingPhone) {
-      if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
-        setError("Please enter a valid 10-digit phone number.");
-        return false;
-      }
-    } else {
-      if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-        setError("Please enter a valid email address.");
-        return false;
-      }
-    }
-    return true;
+  const validateEmail = (emailStr: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(emailStr);
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError("");
-    
-    // TODO: Re-enable after Convex API functions are properly configured
-    toastError("Password reset feature is temporarily disabled. Please try again later.", {
-      richColors: true,
-    });
+
+    if (!email || !validateEmail(email)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSubmitted(true);
+        toastSuccess("If an account with that email exists, a reset link has been sent.", {
+          richColors: true,
+        });
+      } else {
+        setError(data.error || "Failed to process password reset request.");
+        toastError(data.error || "Failed to process password reset request.", {
+          richColors: true,
+        });
+      }
+    } catch (err) {
+      setError("Something went wrong. Please try again.");
+      toastError("Something went wrong. Please try again.", {
+        richColors: true,
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -78,14 +68,11 @@ const ForgotPasswordPage = () => {
           Forgot your password?
         </h2>
         <p className="text-gray-600 text-center text-sm mb-4">
-          Enter your email address and we'll send you a link to reset your
-          password.
+          Enter your email address and we'll send you a link to reset your password.
         </p>
-        <form
-          onSubmit={checkOTP ? handleVerify : handleSubmit}
-          className="space-y-4"
-        >
-          {!usingPhone ? (
+
+        {!submitted ? (
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label
                 htmlFor="email"
@@ -100,66 +87,18 @@ const ForgotPasswordPage = () => {
                 className="w-full px-3 py-2 border border-indigo-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={loading || submitted}
+                disabled={loading}
                 placeholder="you@example.com"
                 required
               />
             </div>
-          ) : checkOTP ? (
-            <div>
-              <label
-                htmlFor="OTPnumber"
-                className="block text-sm font-medium text-indigo-900 mb-1"
-              >
-                Verification code
-              </label>
-              <input
-                id="OTPnumber"
-                type="number"
-                className="w-full px-3 py-2 border border-indigo-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900"
-                value={OTP}
-                onChange={(e) => setOTP(Number(e.target.value))}
-                disabled={loading || submitted}
-                required
-              />
-            </div>
-          ) : (
-            <div>
-              <label
-                htmlFor="phoneNumber"
-                className="block text-sm font-medium text-indigo-900 mb-1"
-              >
-                Phone number
-              </label>
-              <input
-                id="phoneNumber"
-                type="phoneNumber"
-                autoComplete="phoneNumber"
-                className="w-full px-3 py-2 border border-indigo-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900"
-                value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)}
-                disabled={loading || submitted}
-                placeholder="0782222213"
-                required
-              />
-            </div>
-          )}
-          {error && (
-            <div className="text-red-500 text-xs text-center">{error}</div>
-          )}
-          {checkOTP ? (
+            {error && (
+              <div className="text-red-500 text-xs text-center">{error}</div>
+            )}
             <Button
               type="submit"
               className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-md transition-colors disabled:opacity-60 cursor-pointer"
-              disabled={loading || submitted}
-            >
-              Verify
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-md transition-colors disabled:opacity-60 cursor-pointer"
-              disabled={loading || submitted}
+              disabled={loading}
             >
               {loading ? (
                 <div className="flex items-center gap-1 justify-center">
@@ -170,26 +109,32 @@ const ForgotPasswordPage = () => {
                 <span>Send Reset Link</span>
               )}
             </Button>
-          )}
-        </form>
-        <div
-          className="text-sm text-gray-600 text-center cursor-pointer hover:underline"
-          onClick={() => setUsingPhone(!usingPhone)}
-        >
-          use {usingPhone ? "email" : "phone number"} instead
-        </div>
-        {submitted && (
-          <div className="text-green-600 text-center text-sm mt-2">
-            If an account with that email exists, a reset link has been sent.
+          </form>
+        ) : (
+          <div className="space-y-4">
+            <div className="text-green-600 text-center text-sm">
+              If an account with that email exists, a reset link has been sent to your inbox.
+            </div>
+            <p className="text-gray-600 text-center text-sm">
+              Please check your email and click the reset link to proceed.
+            </p>
           </div>
         )}
-        <div className="text-center pt-4">
-          <a
-            href="/login"
-            className="text-indigo-700 underline text-sm hover:text-indigo-900 transition-colors"
-          >
-            Back to Login
-          </a>
+
+        <div className="text-center pt-4 space-y-2">
+          <Link href="/sign-in">
+            <button className="text-indigo-700 underline text-sm hover:text-indigo-900 transition-colors">
+              Back to Login
+            </button>
+          </Link>
+          <div className="text-sm text-gray-600">
+            Need help with{" "}
+            <Link href="/forgot-transaction-password">
+              <span className="text-indigo-700 underline hover:text-indigo-900 transition-colors cursor-pointer">
+                transaction password?
+              </span>
+            </Link>
+          </div>
         </div>
       </div>
     </section>

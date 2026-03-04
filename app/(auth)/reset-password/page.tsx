@@ -1,197 +1,230 @@
 "use client";
 
-import { Eye, EyeOff } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
-import { toastError } from "@/lib/clientToast";
+import React, { useState, useEffect } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "@/convex/_generated/api";
+import Link from "next/link";
 
-function ResetPasswordContent() {
+const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
+
+export default function ResetPasswordPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const token = searchParams.get("token");
-  const email = searchParams.get("email");
-  const phoneNumber = searchParams.get("phoneNumber");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
-  if (!token || (!email && !phoneNumber)) {
-    return (
-      <section className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-100 via-white to-indigo-200 px-4  w-screen">
-        <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-          <h2 className="text-2xl font-bold text-indigo-900 text-center">
-            Invalid or expired reset link
-          </h2>
-          <p className="text-gray-600 text-center text-sm mb-4">
-            The password reset link is invalid or has expired. Please request a
-            new one.
-          </p>
-          <div className="text-center pt-4">
-            <a
-              href="/forgot-password"
-              className="text-indigo-700 underline text-sm hover:text-indigo-900 transition-colors"
-            >
-              Request new reset link
-            </a>
-          </div>
-        </div>
-      </section>
-    );
-  }
+  const [token, setToken] = useState<string>("");
+  const [email, setEmail] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [confirmPassword, setConfirmPassword] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
+  const [success, setSuccess] = useState(false);
+  const [validating, setValidating] = useState(true);
+
+  useEffect(() => {
+    // Get token and email from URL params
+    const tokenParam = searchParams.get("token");
+    const emailParam = searchParams.get("email");
+
+    if (!tokenParam || !emailParam) {
+      setError("Invalid or missing reset token. Please request a new password reset.");
+      setValidating(false);
+      return;
+    }
+
+    setToken(tokenParam);
+    setEmail(decodeURIComponent(emailParam));
+    setValidating(false);
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!password || password.length < 8) {
-      setError("Password must be at least 8 characters.");
+
+    // Validation
+    if (!password || !confirmPassword) {
+      setError("Please fill in all fields");
       return;
     }
+
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError("Passwords do not match");
       return;
     }
+
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+
     setLoading(true);
+
     try {
-      // Call your backend API to verify token and update password
-      const res = await fetch("/api/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, phoneNumber, token, password }),
+      // Call the action to reset the password
+      const result: any = await convex.action(api.user.resetPassword, {
+        email,
+        resetToken: token,
+        newPassword: password,
       });
-      const data = await res.json();
-      if (data.success) {
-        setSuccess(true);
-        setTimeout(() => router.push("/login"), 3000);
-        } else {
-        setError(data.error || "Invalid or expired reset link.");
-        toastError("Token expired");
-        router.push("/forgot-password");
+
+      if (!result.success) {
+        setError(result.error || "Failed to reset password");
+        setLoading(false);
         return;
       }
-    } catch (err) {
-      setError("Something went wrong. Please try again.");
-    } finally {
+
+      // Show success message
+      setSuccess(true);
+      setPassword("");
+      setConfirmPassword("");
+
+      // Redirect to sign-in after 2 seconds
+      setTimeout(() => {
+        router.push("/sign-in");
+      }, 2000);
+    } catch (err: any) {
+      console.error("Password reset error:", err);
+      setError(err?.message || "An error occurred while resetting your password");
       setLoading(false);
     }
   };
 
-  return (
-    <section className="flex items-center justify-center min-h-screen min-w-screen bg-gradient-to-br from-indigo-100 via-white to-indigo-200 px-4 ">
-      <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-        <h2 className="text-2xl font-bold text-indigo-900 text-center">
-          Reset your password
-        </h2>
-        <p className="text-gray-600 text-center text-sm mb-4">
-          Enter your new password for{" "}
-          <span className="font-medium text-indigo-700">
-            {email || phoneNumber}
-          </span>
-        </p>
-        {success ? (
-          <div className="text-green-600 text-center text-sm mt-2">
-            Password reset successful! Redirecting to login...
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-indigo-900 mb-1"
-              >
-                New Password
-              </label>
-              <div className="relative w-full rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900">
-                <input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  className="w-full px-3 py-2 border border-indigo-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={loading}
-                  required
-                  minLength={8}
-                />
-                <div className="h-fit w-full">
-                  {showPassword ? (
-                    <EyeOff
-                      className="absolute top-1/2 -translate-y-1/2 right-2 cursor-pointer text-indigo-500 transition-all duration-1000 ease-in-out"
-                      onClick={() => setShowPassword(false)}
-                    />
-                  ) : (
-                    <Eye
-                      className="absolute top-1/2 -translate-y-1/2 right-2 cursor-pointer text-indigo-500"
-                      onClick={() => setShowPassword(true)}
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="confirmPassword"
-                className="block text-sm font-medium text-indigo-900 mb-1"
-              >
-                Confirm Password
-              </label>
-
-              <input
-                id="confirmPassword"
-                type={showPassword ? "text" : "password"}
-                className="w-full px-3 py-2 border border-indigo-200 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-indigo-50 text-indigo-900"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                disabled={loading}
-                required
-                minLength={8}
-              />
-            </div>
-            {error && (
-              <div className="text-red-500 text-xs text-center">{error}</div>
-            )}
-            <button
-              type="submit"
-              className="w-full py-2 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-md transition-colors disabled:opacity-60 cursor-pointer"
-              disabled={loading}
-            >
-              {loading ? "Resetting..." : "Reset Password"}
-            </button>
-          </form>
-        )}
-        <div className="text-center pt-4">
-          <a
-            href="/login"
-            className="text-indigo-700 underline text-sm hover:text-indigo-900 transition-colors"
-          >
-            Back to Login
-          </a>
+  if (validating) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-cyan-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
         </div>
       </div>
-    </section>
-  );
-}
+    );
+  }
 
-export default function ResetPasswordPage() {
   return (
-    <Suspense
-      fallback={
-        <section className="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-100 via-white to-indigo-200 px-4">
-          <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8 space-y-6">
-            <div className="animate-pulse">
-              <div className="h-8 bg-gray-200 rounded mb-4"></div>
-              <div className="h-4 bg-gray-200 rounded mb-2"></div>
-              <div className="h-4 bg-gray-200 rounded mb-6"></div>
-              <div className="h-10 bg-gray-200 rounded mb-4"></div>
-              <div className="h-10 bg-gray-200 rounded mb-4"></div>
-              <div className="h-10 bg-gray-200 rounded"></div>
+    <div className="flex items-center justify-center min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="w-full max-w-md space-y-8">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            Reset Your Password
+          </h2>
+          <p className="mt-2 text-center text-sm text-gray-600">
+            Enter your new password below
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded-md bg-red-50 p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg
+                  className="h-5 w-5 text-red-400"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm font-medium text-red-800">{error}</p>
+              </div>
             </div>
           </div>
-        </section>
-      }
-    >
-      <ResetPasswordContent />
-    </Suspense>
+        )}
+
+        {success ? (
+          <div className="rounded-md bg-green-50 p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg
+                  className="h-5 w-5 text-green-400"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm font-medium text-green-800">
+                  Password reset successfully! Redirecting to sign in...
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+            <div className="rounded-md shadow-sm -space-y-px">
+              <div>
+                <label htmlFor="email" className="sr-only">
+                  Email address
+                </label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  disabled
+                  value={email}
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-cyan-500 focus:border-cyan-500 focus:z-10 sm:text-sm bg-gray-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">Email (read-only)</p>
+              </div>
+              <div>
+                <label htmlFor="password" className="sr-only">
+                  New Password
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="New Password"
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-cyan-500 focus:border-cyan-500 focus:z-10 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="confirmPassword" className="sr-only">
+                  Confirm Password
+                </label>
+                <input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type="password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm Password"
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-cyan-500 focus:border-cyan-500 focus:z-10 sm:text-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-cyan-600 hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? "Resetting..." : "Reset Password"}
+              </button>
+            </div>
+
+            <div className="text-center">
+              <Link href="/sign-in" className="text-cyan-600 hover:text-cyan-500">
+                Back to Sign In
+              </Link>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
   );
 }

@@ -3,10 +3,15 @@
 import Link from "next/link";
 import React, { useState, Suspense } from "react";
 import { useSession, signOut } from "next-auth/react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 
 const NavigationContent = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { data: session } = useSession();
+  
+  // Fetch user from Convex to check admin role
+  const user: any = useQuery(api.user.getUserByContact, session?.user?.contact ? { contact: session.user.contact } : "skip");
 
   const links = [
     {
@@ -82,6 +87,28 @@ const NavigationContent = () => {
                 {" "}
                 Dashboard
               </Link>
+              {user?.role === 'admin' && (
+                <>
+                  <Link
+                    href="/admin/hot-wallet"
+                    className="text-gray-800 font-medium text-sm relative hover:text-cyan-500 transition-colors duration-300"
+                  >
+                    Hot Wallet
+                  </Link>
+                  <Link
+                    href="/admin/audit-funds"
+                    className="text-gray-800 font-medium text-sm relative hover:text-cyan-500 transition-colors duration-300"
+                  >
+                    Fund Audit
+                  </Link>
+                  <Link
+                    href="/admin/external-transfer"
+                    className="text-gray-800 font-medium text-sm relative hover:text-cyan-500 transition-colors duration-300"
+                  >
+                    External Transfer
+                  </Link>
+                </>
+              )}
               <button
                 onClick={() => signOut({ redirect: true, callbackUrl: "/" })}
                 className="text-sm text-white font-medium bg-red-500 px-3 py-1 rounded hover:bg-red-600 transition-colors"
@@ -161,6 +188,31 @@ const NavigationContent = () => {
                     {" "}
                     Dashboard
                   </Link>
+                  {user?.role === 'admin' && (
+                    <>
+                      <Link
+                        href="/admin/hot-wallet"
+                        onClick={() => setIsOpen(false)}
+                        className="text-gray-800"
+                      >
+                        Hot Wallet
+                      </Link>
+                      <Link
+                        href="/admin/audit-funds"
+                        onClick={() => setIsOpen(false)}
+                        className="text-gray-800"
+                      >
+                        Fund Audit
+                      </Link>
+                      <Link
+                        href="/admin/external-transfer"
+                        onClick={() => setIsOpen(false)}
+                        className="text-gray-800"
+                      >
+                        External Transfer
+                      </Link>
+                    </>
+                  )}
                   <button
                     onClick={() =>
                       signOut({ redirect: true, callbackUrl: "/" })

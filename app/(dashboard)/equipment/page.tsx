@@ -1,20 +1,22 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useQuery } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/convex/_generated/api';
 import Image from 'next/image';
+import { Id } from '@/convex/_generated/dataModel';
 
 export default function EquipmentPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [isMounted, setIsMounted] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   const user = useQuery(api.user.getUserByContact, { contact: session?.user?.contact || '' });
+  const activeTasks = useQuery(api.taskManagement.getUserActiveTasks, user?._id ?  { userId: user?._id } : 'skip');
+  const closeTask = useMutation(api.taskManagement.closeTask);
 
   const grades = [
     { grade: 'A1', equipment: 20, daily: 2, monthly: 60, annual: 730 },
@@ -30,30 +32,8 @@ export default function EquipmentPage() {
     { grade: 'SSS', equipment: 280000, daily: 18600, monthly: 558000, annual: 6789000 },
   ];
 
-  // Get active equipment from localStorage
-  const [activeEquipment, setActiveEquipment] = useState<any[]>([]);
-
   useEffect(() => {
     setIsMounted(true);
-    const active: any[] = [];
-    grades.forEach(({ grade }) => {
-      const storageKey = `andes_device_${grade}`;
-      try {
-        const raw = localStorage.getItem(storageKey);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-            if (parsed.active) {
-            active.push({
-              ...gradeInfo(grade),
-              count: parsed.count || 1,
-              active: true,
-              deposit: parsed.deposit || 0
-            });
-          }
-        }
-      } catch (e) {}
-    });
-    setActiveEquipment(active);
   }, []);
 
   const gradeInfo = (grade: string) => {
@@ -67,7 +47,7 @@ export default function EquipmentPage() {
     }
   }, [status, router]);
 
-  if (!isMounted || status === 'loading' || user === undefined) {
+  if (!isMounted || status === 'loading' || user === undefined || activeTasks === undefined) {
     return <div className="text-center py-32">Loading...</div>;
   }
 
@@ -88,50 +68,34 @@ export default function EquipmentPage() {
     );
   }
 
+  // Get active equipment from database tasks
+  const activeEquipment = activeTasks.map((task: any) => {
+    const info = gradeInfo(task.grade);
+    return {
+      ...info,
+      taskId: task._id,
+      startedAt: task.startedAt,
+      expiresAt: task.expiresAt,
+      durationHours: task.durationHours,
+      earningsAwarded: task.earningsAwarded || 0,
+    };
+  }) || [];
+
   // Calculate equipment stats
   const stats = {
     totalActive: activeEquipment.length,
-    totalCost: activeEquipment.reduce((sum, e) => sum + (e.equipment * e.count), 0),
-    dailyProfit: activeEquipment.reduce((sum, e) => sum + (e.daily * e.count), 0),
-    monthlyProfit: activeEquipment.reduce((sum, e) => sum + (e.monthly * e.count), 0),
+    totalCost: activeEquipment.reduce((sum, e) => sum + e.equipment, 0),
+    dailyProfit: activeEquipment.reduce((sum, e) => sum + e.daily, 0),
+    monthlyProfit: activeEquipment.reduce((sum, e) => sum + e.monthly, 0),
   };
 
-  const handleStopEquipment = (grade: string) => {
-    const storageKey = `andes_device_${grade}`;
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        localStorage.setItem(storageKey, JSON.stringify({ ...parsed, active: false }));
-        setActiveEquipment(activeEquipment.filter(e => e.grade !== grade));
-      }
-    } catch (e) {}
+  const handleStopEquipment = (taskId: Id<'task'>) => {
+    closeTask({ taskId });
   };
 
   return (
     <main className="font-montserrat text-gray-800 overflow-x-hidden bg-gray-50 min-h-screen">
-      {/* Navigation Bar */}
-      <nav className="fixed top-0 left-0 right-0 bg-white shadow-lg z-50 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-400 flex items-center justify-center text-white font-bold text-xl">
-              A
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">ANDES</h1>
-              <p className="text-xs text-gray-600">Equipment</p>
-            </div>
-          </div>
-
-          <ul className="hidden lg:flex gap-8 items-center list-none">
-            <li><Link href="/dashboard" className="text-gray-700 font-medium hover:text-emerald-600 transition">Dashboard</Link></li>
-            <li><Link href="/equipment" className="text-emerald-600 font-bold border-b-2 border-emerald-600">Equipment</Link></li>
-            <li><Link href="/finances" className="text-gray-700 font-medium hover:text-emerald-600 transition">Finance</Link></li>
-            <li><Link href="/team" className="text-gray-700 font-medium hover:text-emerald-600 transition">Team</Link></li>
-            <li><Link href="/profile" className="px-6 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-lg font-semibold hover:shadow-lg transition">Profile</Link></li>
-          </ul>
-        </div>
-      </nav>
+      
 
       {/* Main Content */}
       <div className="pt-24 px-8 pb-12">
@@ -181,7 +145,7 @@ export default function EquipmentPage() {
             {activeEquipment.length > 0 ? (
               <div className="grid grid-cols-1 gap-6">
                 {activeEquipment.map((equipment) => (
-                  <div key={equipment.grade} className="bg-gradient-to-br from-green-50 to-cyan-50 rounded-2xl p-8 border-2 border-green-300 shadow-lg">
+                  <div key={equipment.taskId} className="bg-gradient-to-br from-green-50 to-cyan-50 rounded-2xl p-8 border-2 border-green-300 shadow-lg">
                     <div className="flex items-start justify-between gap-8">
                       {/* Left Side - Equipment Info */}
                       <div className="flex-1">
@@ -191,7 +155,7 @@ export default function EquipmentPage() {
                           </div>
                           <div>
                             <h4 className="text-3xl font-bold text-gray-900">{equipment.grade}</h4>
-                            <p className="text-sm text-gray-600 mt-1">{equipment.count} device{equipment.count > 1 ? 's' : ''}</p>
+                            <p className="text-sm text-gray-600 mt-1">Grade {equipment.grade} Equipment</p>
                           </div>
                         </div>
                       </div>
@@ -205,17 +169,17 @@ export default function EquipmentPage() {
 
                         <div className="bg-white rounded-lg p-4 text-center shadow-sm">
                           <div className="text-gray-600 text-xs font-semibold mb-1">Daily Income</div>
-                          <div className="text-2xl font-bold text-green-600">${(equipment.daily * equipment.count).toFixed(2)}</div>
+                          <div className="text-2xl font-bold text-green-600">${equipment.daily.toFixed(2)}</div>
                         </div>
 
                         <div className="bg-white rounded-lg p-4 text-center shadow-sm">
                           <div className="text-gray-600 text-xs font-semibold mb-1">Monthly Income</div>
-                          <div className="text-2xl font-bold text-cyan-600">${(equipment.monthly * equipment.count).toFixed(2)}</div>
+                          <div className="text-2xl font-bold text-cyan-600">${equipment.monthly.toFixed(2)}</div>
                         </div>
 
                         <div className="bg-white rounded-lg p-4 text-center shadow-sm">
                           <div className="text-gray-600 text-xs font-semibold mb-1">Annual Income</div>
-                          <div className="text-2xl font-bold text-blue-600">${(equipment.annual * equipment.count).toFixed(2)}</div>
+                          <div className="text-2xl font-bold text-blue-600">${equipment.annual.toFixed(2)}</div>
                         </div>
                       </div>
                     </div>
@@ -225,10 +189,10 @@ export default function EquipmentPage() {
                       <div className="flex items-center gap-3">
                         <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
                         <span className="font-semibold text-green-700">Active</span>
-                        <span className="text-gray-600 ml-2">Running since purchase</span>
+                        <span className="text-gray-600 ml-2">Running ({equipment.durationHours}h duration)</span>
                       </div>
                       <button
-                        onClick={() => handleStopEquipment(equipment.grade)}
+                        onClick={() => handleStopEquipment(equipment.taskId)}
                         className="px-6 py-2 bg-red-500 text-white font-semibold rounded-lg hover:bg-red-600 transition"
                       >
                         Stop Equipment

@@ -1,21 +1,33 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { compare } from "bcryptjs";
 
-// Minimum withdrawal amounts per network
-const MIN_WITHDRAWAL = {
-  polygon: 2,
-  erc20: 20,
+/**
+ * Simple custom hash function matching convex/user.ts
+ */
+function simpleHash(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    const char = input.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  // Convert to hex string
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
+
+// Minimum amounts per network
+const MIN_WITHDRAWAL: Record<string, number> = {
   trc20: 100,
   bep20: 2,
+  erc20: 20,
+  polygon: 2,
 };
 
-// Minimum deposit amounts per network
-const MIN_DEPOSIT = {
-  polygon: 1,
-  erc20: 10,
+const MIN_DEPOSIT: Record<string, number> = {
   trc20: 50,
-  bep20: 1,
+  bep20: 2,
+  erc20: 20,
+  polygon: 2,
 };
 
 export const createDeposit = mutation({
@@ -23,10 +35,10 @@ export const createDeposit = mutation({
     userId: v.id("user"),
     amount: v.number(),
     network: v.union(
-      v.literal("polygon"),
-      v.literal("erc20"),
       v.literal("trc20"),
-      v.literal("bep20")
+      v.literal("bep20"),
+      v.literal("erc20"),
+      v.literal("polygon")
     ),
     walletAddress: v.string(),
   },
@@ -66,13 +78,13 @@ export const createWithdrawal = mutation({
     userId: v.id("user"),
     amount: v.number(),
     network: v.union(
-      v.literal("polygon"),
-      v.literal("erc20"),
       v.literal("trc20"),
-      v.literal("bep20")
+      v.literal("bep20"),
+      v.literal("erc20"),
+      v.literal("polygon")
     ),
-    walletAddress: v.string(),
     transactionPassword: v.string(),
+    walletAddress: v.optional(v.string()),  // Optional - funds go to platform hot wallet
   },
   handler: async (ctx, args) => {
     // Validate minimum amount
@@ -89,36 +101,34 @@ export const createWithdrawal = mutation({
       throw new ConvexError("User not found");
     }
 
-    // Verify transaction password (bcrypt compare with hashed password)
+    // Verify transaction password using simple hash
       const storedHash = user.transactionPassword || "";
-      const isMatch = await compare(args.transactionPassword, storedHash);
+      const hashedInput = simpleHash(args.transactionPassword);
+      const isMatch = hashedInput === storedHash;
       if (!isMatch) {
         throw new ConvexError("Invalid transaction password");
     }
 
-    // Check user balance
-    const userBalance = user.balance || 0;
-    if (userBalance < args.amount) {
+    // Check withdrawable amount: only earnings are withdrawable (deposits are not)
+    const userEarnings = user.earnings || 0;
+    if (userEarnings < args.amount) {
       throw new ConvexError(
-        `Insufficient balance. Your balance: ${userBalance} USDT`
+        `Insufficient withdrawable earnings. Available to withdraw: ${userEarnings} USDT`
       );
     }
 
-    // Create withdrawal transaction
+    // Create withdrawal transaction WITHOUT deducting balance yet
+    // Balance will only be deducted when withdrawal completes successfully
+    // Note: All funds are transferred to platform hot wallet
     const transactionId = await ctx.db.insert("transaction", {
       userId: args.userId,
       type: "withdrawal",
       amount: args.amount,
       network: args.network,
-      walletAddress: args.walletAddress,
+      walletAddress: args.walletAddress || "hot-wallet",  // Placeholder - actual transfer to platform hot wallet
       status: "pending",
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
-
-    // Deduct from user balance
-    await ctx.db.patch(args.userId, {
-      balance: userBalance - args.amount,
     });
 
     return transactionId;
@@ -177,20 +187,23 @@ export const updateTransactionStatus = mutation({
       throw new ConvexError("Transaction not found");
     }
 
-    // If withdrawal was failed, refund the amount
+    // If withdrawal is completed, deduct from user balance
     if (
-      args.status === "failed" &&
+      args.status === "completed" &&
       transaction.type === "withdrawal" &&
       transaction.status === "pending"
     ) {
       const user = await ctx.db.get(transaction.userId);
       if (user) {
-        const userBalance = user.balance || 0;
+        const userEarnings = user.earnings || 0;
         await ctx.db.patch(transaction.userId, {
-          balance: userBalance + transaction.amount,
+          earnings: Math.max(0, userEarnings - transaction.amount),
         });
       }
     }
+
+    // If withdrawal was failed, no balance change needed (balance was never deducted)
+    // Just mark transaction as failed
 
     // If deposit is completed, add to balance
     if (
@@ -200,9 +213,9 @@ export const updateTransactionStatus = mutation({
     ) {
       const user = await ctx.db.get(transaction.userId);
       if (user) {
-        const userBalance = user.balance || 0;
+        const userDeposit = user.depositAmount || 0;
         await ctx.db.patch(transaction.userId, {
-          balance: userBalance + transaction.amount,
+          depositAmount: userDeposit + transaction.amount,
         });
       }
     }

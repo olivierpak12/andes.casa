@@ -5,6 +5,7 @@ import "./globals.css";
 import NextAuthSessionProvider from "./SessionProvider";
 import { ToasterWrapper } from "./ToasterWrapper";
 import ConvexClientProvider from "./ConvexClientProvider";
+import { Toaster } from "@/components/ui/sonner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -52,7 +53,7 @@ export default function RootLayout({
 
               {children}
             </main>
-            <ToasterWrapper />
+           <Toaster/>
           {/* </ClerkProviderWrapper> */}
           </ConvexClientProvider>
         </NextAuthSessionProvider>

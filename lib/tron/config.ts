@@ -18,14 +18,17 @@ export const TRON_CONFIG = {
 } as const;
 
 // 🔁 Auto-switch network
+// FORCE_TESTNET overrides NODE_ENV for explicit testnet use
 export const ACTIVE_NETWORK =
-  process.env.NODE_ENV === "production"
+  process.env.FORCE_TESTNET === 'true'
+    ? TRON_CONFIG.NILE
+    : process.env.NODE_ENV === "production"
     ? TRON_CONFIG.MAINNET
     : TRON_CONFIG.NILE;
 
 // ✅ CORRECT TRC20 USDT CONTRACTS
 export const USDT_CONTRACT = {
-  // Nile Testnet USDT (TRC20)
+  // Nile Testnet USDT (TRC20) - OFFICIAL TESTNET CONTRACT
   NILE: "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
 
   // Mainnet USDT (official)
@@ -34,7 +37,9 @@ export const USDT_CONTRACT = {
 
 // 🎯 Active USDT contract
 export const ACTIVE_USDT_CONTRACT =
-  process.env.NODE_ENV === "production"
+  process.env.FORCE_TESTNET === 'true'
+    ? USDT_CONTRACT.NILE
+    : process.env.NODE_ENV === "production"
     ? USDT_CONTRACT.MAINNET
     : USDT_CONTRACT.NILE;
 

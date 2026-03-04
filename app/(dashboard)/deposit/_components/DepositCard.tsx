@@ -37,46 +37,7 @@ export function DepositCard({
     <div className="space-y-8 animate-fade-in">
       
       {/* 1. STATUS BANNER */}
-      {showActivationWarning ? (
-        <div className="relative overflow-hidden rounded-2xl bg-amber-50 border border-amber-200 p-5 flex flex-col md:flex-row gap-5 items-start md:items-center">
-          {/* Glow effect */}
-          <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-amber-400 to-orange-500"></div>
-          
-          <div className="p-3 bg-amber-100 rounded-xl shrink-0 border border-amber-200 shadow-sm">
-             <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-             </svg>
-          </div>
-          <div className="flex-1">
-            <h3 className="font-bold text-amber-900 text-lg tracking-wide">Action Required: Activate Wallet</h3>
-            <p className="text-amber-800/80 text-sm mt-1 leading-relaxed">
-              To enable automated USDT crediting, please activate this address by sending <span className="font-bold text-amber-800">~1 TRX</span>.
-            </p>
-          </div>
-          <div className="hidden md:block">
-             <div className="px-4 py-2 bg-white rounded-lg border border-amber-200 text-amber-700 font-mono text-sm font-bold flex items-center gap-2 shadow-sm">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                Bal: {trxBalance} TRX
-             </div>
-          </div>
-        </div>
-      ) : (
-        <div className="relative overflow-hidden rounded-2xl bg-emerald-50 border border-emerald-100 p-4 flex items-center gap-4">
-           <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_#10b981]"></div>
-           <div className="flex-1">
-             <p className="text-emerald-800 font-medium text-sm">
-               Wallet Active & Monitoring
-             </p>
-           </div>
-           {walletBalance && (
-             <div className="flex gap-2 text-xs font-mono">
-                <div className="px-3 py-1.5 bg-white rounded-lg border border-emerald-200 text-emerald-700 shadow-sm">
-                   TRX: {trxBalance}
-                </div>
-             </div>
-           )}
-        </div>
-      )}
+      
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
         

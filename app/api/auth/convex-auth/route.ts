@@ -1,7 +1,20 @@
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
-import { compare } from "bcryptjs";
 import { count } from "console";
+
+/**
+ * Simple custom hash function matching convex/user.ts
+ */
+function simpleHash(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    const char = input.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  // Convert to hex string
+  return Math.abs(hash).toString(16).padStart(8, '0');
+}
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL || "http://localhost:3210";
 const convex = new ConvexHttpClient(convexUrl);
@@ -47,7 +60,9 @@ export async function POST(request: Request) {
     // Verify password
     console.log("[convex-auth] Verifying password");
     const isCountryCodeValid = user.countryCode === countryCode;
-    const isPasswordValid = await compare(password, user.password || "");
+    // Compare password using simple hash function
+    const hashedInput = simpleHash(password);
+    const isPasswordValid = hashedInput === (user.password || "");
 
     if (!isCountryCodeValid) {
       console.log("[convex-auth] Country code verification failed",countryCode,typeof(countryCode));

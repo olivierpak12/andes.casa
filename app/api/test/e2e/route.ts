@@ -15,7 +15,7 @@ export async function GET() {
     const txPassword = "txpass123";
 
     // Register user A
-    const resA: any = await convex.action(api.user.registerUser, {
+    const resA: any = await convex.mutation(api.user.registerUser, {
       countryCode,
       password,
       confirmPassword: password,
@@ -39,7 +39,7 @@ export async function GET() {
 
     // 2) Register invitee (user B) using inviteCode
     const contactB = `+1555${stamp}2`;
-    const resB: any = await convex.action(api.user.registerUser, {
+    const resB: any = await convex.mutation(api.user.registerUser, {
       countryCode,
       password,
       confirmPassword: password,
@@ -56,6 +56,11 @@ export async function GET() {
     // 3) Query team report for inviter
     const inviterUser = await convex.query(api.user.getUserByContact, { contact: contactA });
     const inviterId = inviterUser?._id;
+    
+    if (!inviterId) {
+      return new Response(JSON.stringify({ error: 'Inviter user not found' }), { status: 404 });
+    }
+    
     const report = await convex.query(api.team.getTeamReport, { userId: inviterId });
 
     return new Response(JSON.stringify({ inviter: inviterUser, inviteCode, registerInvitee: resB, teamReport: report }), { status: 200 });

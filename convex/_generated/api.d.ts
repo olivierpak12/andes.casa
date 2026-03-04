@@ -9,8 +9,11 @@
  */
 
 import type * as deposit from "../deposit.js";
+import type * as externalTransfer from "../externalTransfer.js";
 import type * as invite from "../invite.js";
+import type * as recovery from "../recovery.js";
 import type * as settings from "../settings.js";
+import type * as taskManagement from "../taskManagement.js";
 import type * as team from "../team.js";
 import type * as transaction from "../transaction.js";
 import type * as user from "../user.js";
@@ -25,8 +28,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   deposit: typeof deposit;
+  externalTransfer: typeof externalTransfer;
   invite: typeof invite;
+  recovery: typeof recovery;
   settings: typeof settings;
+  taskManagement: typeof taskManagement;
   team: typeof team;
   transaction: typeof transaction;
   user: typeof user;

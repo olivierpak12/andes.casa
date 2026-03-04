@@ -1,7 +1,6 @@
 // hooks/useDepositAddress.ts
-
 import { useState, useCallback } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import toast from "react-hot-toast";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -10,27 +9,18 @@ interface UseDepositAddressProps {
   userId: Id<"user"> | undefined;
 }
 
-interface GenerateAddressResult {
-  address: string;
-  isNew: boolean;
-}
-
 export function useDepositAddress({ userId }: UseDepositAddressProps) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Query existing addresses
+  // Reactive — updates automatically once the API route saves to Convex
   const depositAddresses = useQuery(
     api.deposit.getUserDepositAddresses,
     userId ? { userId } : "skip"
   );
 
-  // Mutation to save address to Convex
-  const saveAddress = useMutation(api.deposit.saveDepositAddress);
-
-  // Generate new deposit address
   const generateAddress = useCallback(
-    async (network: "erc20" | "bep20" | "trc20" | "polygon") => {
+    async (network: "trc20" | "bep20" | "erc20" | "polygon") => {
       if (!userId) {
         toast.error("User not authenticated");
         return null;
@@ -40,53 +30,37 @@ export function useDepositAddress({ userId }: UseDepositAddressProps) {
       setError(null);
 
       try {
-        // Call API route to generate address
-        const response = await fetch("/api/tron/generate-address", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ network }),
-        });
+        // GET /api/deposit/address handles everything:
+        // - returns existing address if already generated
+        // - generates new address + saves address AND private key to Convex
+        const response = await fetch("/api/tron/deposit/address");
 
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "Failed to generate address");
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${response.status}`);
         }
 
-        const data: GenerateAddressResult = await response.json();
+        const data = await response.json();
 
-        // If it's a new address, save it to Convex
-        if (data.isNew) {
-          await saveAddress({
-            userId,
-            network,
-            address: data.address,
-          });
-
-          toast.success("New deposit address generated!");
-        } else {
-          toast.success("Deposit address loaded!");
+        if (!data.depositAddress) {
+          throw new Error("No address returned from server");
         }
 
-        return data.address;
+        toast.success(data.isNew ? "New deposit address generated!" : "Deposit address loaded!");
+        return data.depositAddress as string;
+
       } catch (err: any) {
-        const errorMessage = err.message || "Failed to generate deposit address";
-        setError(errorMessage);
-        toast.error(errorMessage);
-        console.error("Deposit address generation error:", err);
+        const msg = err.message || "Failed to get deposit address";
+        setError(msg);
+        toast.error(msg);
+        console.error("[useDepositAddress]", err);
         return null;
       } finally {
         setGenerating(false);
       }
     },
-    [userId, saveAddress]
+    [userId]
   );
 
-  return {
-    depositAddresses,
-    generating,
-    error,
-    generateAddress,
-  };
+  return { depositAddresses, generating, error, generateAddress };
 }

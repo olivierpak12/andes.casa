@@ -9,6 +9,20 @@ export const getSettings = query({
   },
 });
 
+export const getSettingByKey = query({
+  args: {
+    key: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const record = await ctx.db
+      .query('settings')
+      .withIndex('by_key', (q: any) => q.eq('key', args.key))
+      .first();
+    if (!record) return null;
+    return record;
+  },
+});
+
 export const setSettings = mutation({
   args: {
     key: v.string(),
