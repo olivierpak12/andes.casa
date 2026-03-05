@@ -1,188 +1,264 @@
-// pages/api/tron/poll-deposits.ts
-// This endpoint should be called by a cron job every minute to check for new deposits
+// app/api/tron/poll-deposits/route.ts
+// Called by a cron job every minute to check ALL users for new deposits.
 
-import type { NextApiRequest, NextApiResponse } from "next";
-import { ConvexHttpClient } from "convex/browser";
-import { api } from "@/convex/_generated/api";
-import { getAccountBalance, getNewTransactions } from "@/lib/tron/utils";
-import { MIN_DEPOSIT, REQUIRED_CONFIRMATIONS } from "@/lib/tron/config";
+import { NextRequest, NextResponse } from 'next/server';
+import { ConvexHttpClient } from 'convex/browser';
+import { api } from '@/convex/_generated/api';
+import { getAccountBalance, getNewTransactions } from '@/lib/tron/utils';
+import { sendTrx, sweepUsdtFromAddress } from '@/server/tronService';
+import { MIN_DEPOSIT } from '@/lib/tron/config';
 
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
-
-// Secure this endpoint with a secret key
+const convex      = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 const CRON_SECRET = process.env.CRON_SECRET || 'your-secret-key';
+const MIN_SWEEP   = 1; // USDT — skip dust
+const SWEEP_DELAY = 8_000; // ms to wait after gas funding
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  // Verify cron secret
-  const authHeader = req.headers.authorization;
-  if (authHeader !== `Bearer ${CRON_SECRET}`) {
-    return res.status(401).json({ error: "Unauthorized" });
+async function fundAndSweep(
+  depositAddress:    string,
+  hotWalletAddress:  string,
+  depositPrivateKey: string,
+  trxBalance:        number,
+  usdtBalance:       number
+): Promise<{ txId: string; amount: number } | null> {
+  if (usdtBalance < MIN_SWEEP) return null;
+
+  if (trxBalance < 5) {
+    console.log(`  ⚡ [SWEEP] Low TRX (${trxBalance}). Funding 5 TRX...`);
+    try {
+      const fundTx = await sendTrx(depositAddress, 5);
+      console.log(`  ✅ [SWEEP] Gas funded: ${fundTx}`);
+      await new Promise((r) => setTimeout(r, SWEEP_DELAY));
+    } catch (e: any) {
+      console.error(`  ❌ [SWEEP] Gas funding failed: ${e?.message}`);
+    }
   }
 
   try {
-    console.log("🔄 Starting deposit polling service...");
+    // ✅ Pass depositPrivateKey from Convex — no keystore file
+    const res = await sweepUsdtFromAddress(depositAddress, hotWalletAddress, depositPrivateKey);
+    if (res?.txId) {
+      console.log(`  ✅ [SWEEP] ${res.amount} USDT → ${hotWalletAddress} | txId: ${res.txId}`);
+      return res;
+    }
+    return null;
+  } catch (e: any) {
+    console.error(`  ❌ [SWEEP] Failed: ${e?.message}`);
+    return null;
+  }
+}
 
-    // Get all users with TRC20 deposit addresses
+async function recordDeposit(params: {
+  userId:          string;
+  depositAddress:  string;
+  txHash:          string;
+  amount:          number;
+}): Promise<boolean> {
+  try {
+    // Idempotency — skip if already recorded
+    const existing = await convex.query(api.deposit.getDepositByHash, { txHash: params.txHash }).catch(() => null);
+    if (existing) {
+      console.log(`  ⏭️  Already recorded: ${params.txHash}`);
+      return false;
+    }
+
+    const depositId = await convex.mutation(api.deposit.recordDeposit, {
+      userId:          params.userId as any,
+      network:         'trc20',
+      amount:          params.amount,
+      walletAddress:   params.depositAddress,
+      transactionHash: params.txHash,
+    });
+
+    await convex.mutation(api.deposit.updateDepositStatus, {
+      transactionHash: params.txHash,
+      status:          'completed',
+    });
+
+    console.log(`  ✅ Recorded $${params.amount} USDT | ${params.txHash}`);
+    return true;
+  } catch (e: any) {
+    console.error(`  ❌ Failed to record ${params.txHash}: ${e?.message}`);
+    return false;
+  }
+}
+
+// ─── Route ────────────────────────────────────────────────────────────────────
+
+export async function POST(req: NextRequest) {
+  // Verify cron secret
+  const authHeader = req.headers.get('authorization');
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    console.log('\n🔄 Starting deposit poll...');
+    const pollStarted = Date.now();
+
     const users = await convex.query(api.user.getAllUsersWithDepositAddresses, {});
-    
-    console.log(`👥 Found ${users.length} users to check`);
+    console.log(`👥 ${users.length} users to check`);
 
-    let totalDepositsFound = 0;
-    let totalDepositsProcessed = 0;
-    const results = [];
+    const hotWalletAddress = process.env.MAIN_WALLET_ADDRESS;
+    let totalFound     = 0;
+    let totalProcessed = 0;
+    const results: any[] = [];
 
     for (const user of users) {
-      const depositAddress = user.depositAddresses?.trc20;
-      
+      const depositAddress   = user.depositAddresses?.trc20;
+      // ✅ Private key from Convex — not from keystore file
+      const depositPrivateKey = user.depositPrivateKeys?.trc20;
+
       if (!depositAddress) continue;
 
+      const canSweep = !!(depositPrivateKey && hotWalletAddress);
+
+      if (!depositPrivateKey) {
+        console.log(`  ⚠️  ${user.contact}: no private key stored — sweep disabled for this address`);
+      }
+
       try {
-        console.log(`\n📍 Checking ${user.contact} - ${depositAddress}`);
+        console.log(`\n📍 ${user.contact} — ${depositAddress}`);
 
-        // Get last check timestamp
-        const lastCheck = user.lastDepositCheck || 0;
-        
-        // Get new transactions
-        const newTransactions = await getNewTransactions(depositAddress, lastCheck);
-        
-        if (newTransactions.length === 0) {
-          console.log("  ℹ️  No new transactions");
-          continue;
-        }
-
-        console.log(`  📊 Found ${newTransactions.length} new transactions`);
-        totalDepositsFound += newTransactions.length;
-
+        const lastCheck = user.lastDepositCheck ?? 0;
         let latestTimestamp = lastCheck;
-        
+
+        // ── Fetch on-chain data ──────────────────────────────────────────
+        const [balance, newTransactions] = await Promise.all([
+          getAccountBalance(depositAddress),
+          getNewTransactions(depositAddress, lastCheck),
+        ]);
+
+        console.log(`  💰 Balance: TRX ${balance.trx} | USDT ${balance.usdt}`);
+        console.log(`  📊 New txs: ${newTransactions.length}`);
+
+        totalFound += newTransactions.length;
+
+        // ── Process each new inbound tx ──────────────────────────────────
         for (const tx of newTransactions) {
-          // Only process incoming transactions
-          if (tx.to !== depositAddress) {
-            console.log(`  ⏭️  Skipping outgoing tx: ${tx.txHash}`);
-            continue;
-          }
-          
-          // Only process confirmed transactions
-          if (!tx.confirmed) {
-            console.log(`  ⏳ Pending tx: ${tx.txHash}`);
-            continue;
-          }
+          if ((tx?.to ?? '').toLowerCase() !== depositAddress.toLowerCase()) continue;
+          if (!tx?.confirmed) { console.log(`  ⏳ Unconfirmed: ${tx?.txHash}`); continue; }
+          if (hotWalletAddress && tx?.from === hotWalletAddress) { console.log(`  ⏭️  Own funding tx`); continue; }
 
-          // Check minimum deposit
-          const amount = tx.type === 'TRX' ? tx.amount : tx.amount;
-          const minDeposit = tx.type === 'TRX' ? MIN_DEPOSIT.TRX : MIN_DEPOSIT.USDT;
-          
+          const amount = Number(tx?.amount);
+          const minDeposit = tx?.type === 'TRX' ? MIN_DEPOSIT.TRX : MIN_DEPOSIT.USDT;
+
           if (amount < minDeposit) {
-            console.log(`  ⚠️  Amount too small: ${amount} ${tx.type} (min: ${minDeposit})`);
+            console.log(`  ⚠️  Too small: ${amount} ${tx?.type} (min ${minDeposit})`);
             continue;
           }
 
-          // Check if already processed
-          const existing = await convex.query(api.deposit.getDepositByHash, {
-            txHash: tx.txHash,
-          });
+          let recordedHash   = tx?.txHash;
+          let recordedAmount = amount;
 
-          if (existing) {
-            console.log(`  ⏭️  Already processed: ${tx.txHash}`);
-            continue;
-          }
-
-          // Record deposit
-          try {
-            const depositId = await convex.mutation(api.deposit.recordDeposit, {
-              userId: user._id,
-              network: 'trc20',
-              amount,
-              walletAddress: depositAddress,
-              transactionHash: tx.txHash,
-            });
-
-            console.log(`  ✅ Recorded: ${amount} ${tx.type} - ${tx.txHash}`);
-
-            // Update to completed and credit balance
-            await convex.mutation(api.deposit.updateDepositStatus, {
-              transactionHash: tx.txHash,
-              status: 'completed',
-            });
-
-            console.log(`  💰 Balance credited: ${amount} USDT`);
-
-            totalDepositsProcessed++;
-
-            // Track latest timestamp
-            if (tx.timestamp > latestTimestamp) {
-              latestTimestamp = tx.timestamp;
+          // Auto-sweep USDT to hot wallet
+          if (tx?.type === 'TRC20' && canSweep && hotWalletAddress && depositPrivateKey) {
+            const sweep = await fundAndSweep(
+              depositAddress,
+              hotWalletAddress,
+              depositPrivateKey,
+              balance.trx,
+              balance.usdt
+            );
+            if (sweep) {
+              recordedHash   = sweep.txId;
+              recordedAmount = sweep.amount;
             }
+          }
 
+          const recorded = await recordDeposit({
+            userId:         user._id,
+            depositAddress,
+            txHash:         recordedHash,
+            amount:         recordedAmount,
+          });
+
+          if (recorded) {
+            totalProcessed++;
             results.push({
-              user: user.contact,
+              user:    user.contact,
               address: depositAddress,
-              txHash: tx.txHash,
-              amount,
-              type: tx.type,
-              status: 'processed',
+              txHash:  recordedHash,
+              amount:  recordedAmount,
+              type:    tx?.type,
+              status:  'processed',
+            });
+          }
+
+          if (tx?.timestamp > latestTimestamp) latestTimestamp = tx?.timestamp;
+        }
+
+        // ── Fallback sweep: USDT on-chain but no new txs detected ────────
+        if (
+          newTransactions.length === 0 &&
+          balance.usdt >= MIN_SWEEP &&
+          canSweep &&
+          hotWalletAddress &&
+          depositPrivateKey
+        ) {
+          console.log(`  🔍 [FALLBACK] ${balance.usdt} USDT idle on address — attempting sweep`);
+
+          const sweep = await fundAndSweep(
+            depositAddress,
+            hotWalletAddress,
+            depositPrivateKey,
+            balance.trx,
+            balance.usdt
+          );
+
+          if (sweep) {
+            const recorded = await recordDeposit({
+              userId:         user._id,
+              depositAddress,
+              txHash:         sweep.txId,
+              amount:         sweep.amount,
             });
 
-          } catch (error: any) {
-            console.error(`  ❌ Error processing deposit:`, error.message);
-            results.push({
-              user: user.contact,
-              address: depositAddress,
-              txHash: tx.txHash,
-              amount,
-              type: tx.type,
-              status: 'error',
-              error: error.message,
-            });
+            if (recorded) {
+              totalProcessed++;
+              results.push({
+                user:    user.contact,
+                address: depositAddress,
+                txHash:  sweep.txId,
+                amount:  sweep.amount,
+                type:    'TRC20',
+                status:  'processed_fallback_sweep',
+              });
+            }
           }
         }
 
-        // Update last check timestamp
-        if (latestTimestamp > lastCheck) {
-          await convex.mutation(api.user.updateLastDepositCheck, {
-            userId: user._id,
-            timestamp: latestTimestamp,
-          });
-          console.log(`  🕒 Updated last check: ${new Date(latestTimestamp).toISOString()}`);
-        }
-
-      } catch (error: any) {
-        console.error(`❌ Error checking user ${user.contact}:`, error);
-        results.push({
-          user: user.contact,
-          status: 'error',
-          error: error.message,
+        // ── Advance lastCheck ────────────────────────────────────────────
+        const newTimestamp = Math.max(latestTimestamp, pollStarted);
+        await convex.mutation(api.deposit.updateLastDepositCheck, {
+          userId:    user._id,
+          timestamp: newTimestamp,
         });
+        console.log(`  🕐 lastCheck → ${new Date(newTimestamp).toISOString()}`);
+
+      } catch (e: any) {
+        console.error(`❌ Error for ${user.contact}: ${e?.message}`);
+        results.push({ user: user.contact, status: 'error', error: e?.message });
       }
     }
 
-    console.log(`\n✨ Polling complete!`);
-    console.log(`   Total deposits found: ${totalDepositsFound}`);
-    console.log(`   Total deposits processed: ${totalDepositsProcessed}`);
+    console.log(`\n✨ Poll complete — found: ${totalFound}, processed: ${totalProcessed}\n`);
 
-    return res.status(200).json({
-      success: true,
-      usersChecked: users.length,
-      depositsFound: totalDepositsFound,
-      depositsProcessed: totalDepositsProcessed,
+    return NextResponse.json({
+      success:           true,
+      usersChecked:      users.length,
+      depositsFound:     totalFound,
+      depositsProcessed: totalProcessed,
       results,
-      timestamp: Date.now(),
+      timestamp:         Date.now(),
     });
 
-  } catch (error: any) {
-    console.error("❌ Polling service error:", error);
-    
-    return res.status(500).json({
-      success: false,
-      error: "Polling service failed",
-      details: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+  } catch (e: any) {
+    console.error('❌ Poll service error:', e?.message);
+    return NextResponse.json(
+      { success: false, error: 'Polling failed', details: process.env.NODE_ENV === 'development' ? e?.message : undefined },
+      { status: 500 }
+    );
   }
 }

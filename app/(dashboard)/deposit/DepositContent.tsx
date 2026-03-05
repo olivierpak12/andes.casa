@@ -8,10 +8,11 @@ import { api } from "@/convex/_generated/api";
 import QRCode from "qrcode";
 import toast from "react-hot-toast";
 import { DepositCard } from "./_components/DepositCard";
-import { NetworkSelector } from "./_components/NetworkSelector";
+// network selector not needed now that only TRC20 is supported
 import { DepositHeader } from "./_components/DepositHeader";
 import { TeamSection } from "./_components/TeamSection";
 import { useDepositAddress } from "@/lib/hooks/useDepositAddress";
+import { useRouter } from "next/navigation";
 
 // Define auth states as constants
 const AUTH_STATE = {
@@ -23,12 +24,11 @@ const AUTH_STATE = {
 export default function DepositContent() {
   const { data: session, status } = useSession();
 
-  // Deposit state
-  const [selectedNetwork, setSelectedNetwork] = useState<
-    "trc20" | "bep20" | "erc20" | "polygon"
-  >("trc20");
+  // Deposit state (only TRC20)
+  const selectedNetwork = "trc20";
   const [copied, setCopied] = useState(false);
   const [qrSrc, setQrSrc] = useState("");
+  const router = useRouter();
 
   // Convex queries
   const user = useQuery(
@@ -46,10 +46,8 @@ export default function DepositContent() {
     userId: user?._id,
   });
 
-  // Get current address for selected network
-  const currentAddress = useMemo(() => {
-    return depositAddresses?.[selectedNetwork] || "";
-  }, [depositAddresses, selectedNetwork]);
+  // Get current address for TRC20 network
+  const currentAddress = depositAddresses?.trc20 || "";
 
   // ROBUST AUTH STATE LOGIC
   const authState = useMemo(() => {
@@ -72,48 +70,19 @@ export default function DepositContent() {
     return AUTH_STATE.AUTHENTICATED;
   }, [status, session, user]);
 
-  // Define networks
-  const networks = useMemo(
-    () => [
-      { id: "trc20", label: "Tron•TRC20 [USDT/TRX]" },
-      { id: "bep20", label: "BNB•BEP20 [USDT/USDC]" },
-      { id: "erc20", label: "Ethereum•ERC20 [USDT/USDC]" },
-      { id: "polygon", label: "Polygon•ERC20 [USDT/USDC]" },
-    ],
+
+
+  // Deposit information (Tron/TRC20 only) - memoized to keep reference stable
+  const depositInfo = useMemo(
+    () => ({
+      id: "trc20",
+      network: "Tron (TRC20)",
+      token: "USDT / TRX",
+      minDeposit: 10,
+    }),
     []
   );
 
-  // Get deposit info based on network
-  const depositInfo = useMemo(() => {
-    const infoMap = {
-      trc20: {
-        id: "trc20",
-        network: "Tron (TRC20)",
-        token: "USDT / TRX",
-        minDeposit: 10,
-      },
-      bep20: {
-        id: "bep20",
-        network: "BNB Chain (BEP20)",
-        token: "USDT / USDC",
-        minDeposit: 10,
-      },
-      erc20: {
-        id: "erc20",
-        network: "Ethereum (ERC20)",
-        token: "USDT / USDC",
-        minDeposit: 50,
-      },
-      polygon: {
-        id: "polygon",
-        network: "Polygon",
-        token: "USDT / USDC",
-        minDeposit: 10,
-      },
-    };
-
-    return infoMap[selectedNetwork];
-  }, [selectedNetwork]);
 
   // Balance state 
   const [walletBalance, setWalletBalance] = useState<{ trx: number; usdt: number } | null>(null);
@@ -129,36 +98,65 @@ export default function DepositContent() {
 
   // Generate address when network changes and no address exists
   useEffect(() => {
+    const userId = user && typeof user._id !== "undefined" ? user._id : null;
+
     if (
       authState === AUTH_STATE.AUTHENTICATED &&
-      user?._id &&
+      userId &&
       !currentAddress &&
       !generating
     ) {
       // Auto-generate address for the selected network
-      generateAddress(selectedNetwork);
+      generateAddress("trc20");
     }
-  }, [authState, user?._id, currentAddress, generating, selectedNetwork, generateAddress]);
+    // Keep dependency array length stable by always providing the same
+    // set of entries (use null for absent userId)
+  }, [authState, user && user._id ? user._id : null, currentAddress, generating, generateAddress]);
 
   // Initial balance check on mount or address change
   useEffect(() => {
     let mounted = true;
+    let timeoutId: NodeJS.Timeout;
     
     const checkBalance = async () => {
-      if (!currentAddress || selectedNetwork !== 'trc20') return;
+      if (!currentAddress) return;
       
       try {
         setLoadingBalance(true);
-        const response = await fetch("/api/tron/check-deposits");
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
+        const response = await fetch("/api/tron/check-deposits", {
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const data = await response.json();
         
         if (mounted && data.balance) {
           setWalletBalance(data.balance);
         }
       } catch (error) {
-        console.error("Failed to fetch initial balance:", error);
+        if (mounted) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("Failed to check balance:", message);
+          
+          // Only show error if it's not a normal abort
+          if (message !== "The operation was aborted") {
+            toast.error(`Balance check failed: ${message.substring(0, 100)}`);
+          }
+        }
       } finally {
-        if (mounted) setLoadingBalance(false);
+        if (mounted) {
+          clearTimeout(timeoutId);
+          setLoadingBalance(false);
+        }
       }
     };
 
@@ -168,8 +166,9 @@ export default function DepositContent() {
 
     return () => {
       mounted = false;
+      clearTimeout(timeoutId);
     };
-  }, [currentAddress, selectedNetwork]);
+  }, [currentAddress]);
 
   // QR Code generation effect
   useEffect(() => {
@@ -208,16 +207,10 @@ export default function DepositContent() {
     }
   };
 
-  // Handle network change
-  const handleNetworkChange = (networkId: string) => {
-    setSelectedNetwork(networkId as "trc20" | "bep20" | "erc20" | "polygon");
-    // Reset balance state on network change
-    setWalletBalance(null);
-  };
 
   // Handle manual address generation (optional button)
   const handleGenerateAddress = async () => {
-    await generateAddress(selectedNetwork);
+    await generateAddress('trc20');
   };
 
   const checkDeposits = async () => {
@@ -306,7 +299,7 @@ export default function DepositContent() {
                   <p className="text-slate-500 text-sm font-medium tracking-wide uppercase">Total Balance</p>
                   <div className="mt-2 flex items-baseline gap-1">
                     <span className="text-4xl md:text-5xl font-bold text-slate-900 tracking-tight">
-                      ${user?.balance?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}
+                      ${user?.depositAmount?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}
                     </span>
                     <span className="text-lg text-slate-500 font-medium">USDT</span>
                   </div>
@@ -320,7 +313,7 @@ export default function DepositContent() {
 
                 {/* Quick Actions (Future) */}
                 <div className="mt-8 grid grid-cols-2 gap-3">
-                   <button onClick={() => toast("Withdrawals coming soon", { icon: "🚧" })} className="px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-all text-sm font-medium text-slate-600">
+                   <button onClick={()=> router.push('/withdraw')}  className="px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 hover:bg-slate-100 transition-all text-sm font-medium text-slate-600">
                       Withdraw
                    </button>
                    <button className="px-4 py-3 rounded-xl bg-cyan-50 border border-cyan-100 text-cyan-700 cursor-default text-sm font-medium">
@@ -344,17 +337,6 @@ export default function DepositContent() {
                {/* Top Glow Line */}
                <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent"></div>
 
-               {/* Network Selector */}
-               <div className="px-6 md:px-8 pt-8">
-                  <NetworkSelector
-                    networks={networks}
-                    selected={selectedNetwork}
-                    onSelect={handleNetworkChange}
-                  />
-               </div>
-
-               {/* Divider */}
-               <div className="h-px bg-slate-100 my-2 mx-8"></div>
 
                <div className="p-6 md:p-8">
                    <DepositCard

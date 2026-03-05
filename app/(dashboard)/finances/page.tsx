@@ -80,27 +80,7 @@ export default function FinancesPage() {
 
   return (
     <main className="font-montserrat text-gray-800 overflow-x-hidden bg-gray-50 min-h-screen">
-      {/* Navigation Bar */}
-      <nav className="fixed top-0 left-0 right-0 bg-white shadow-lg z-50 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-400 flex items-center justify-center text-white font-bold text-xl">
-              A
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">ANDES</h1>
-              <p className="text-xs text-gray-600">Finances</p>
-            </div>
-          </div>
-
-          <ul className="hidden lg:flex gap-8 items-center list-none">
-            <li><Link href="/dashboard" className="text-gray-700 font-medium hover:text-emerald-600 transition">Dashboard</Link></li>
-            <li><Link href="/finances" className="text-emerald-600 font-bold border-b-2 border-emerald-600">Finances</Link></li>
-            <li><Link href="/team" className="text-gray-700 font-medium hover:text-emerald-600 transition">Team</Link></li>
-            <li><Link href="/profile" className="px-6 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-lg font-semibold hover:shadow-lg transition">Profile</Link></li>
-          </ul>
-        </div>
-      </nav>
+    
 
       {/* Main Content */}
       <div className="pt-24 px-8 pb-12">
@@ -116,14 +96,14 @@ export default function FinancesPage() {
             {/* Total Balance */}
             <div className="bg-white rounded-2xl p-8 shadow-lg hover:shadow-xl transition border-l-4 border-emerald-500">
               <div className="text-gray-600 text-sm font-semibold mb-2">Total Balance</div>
-              <div className="text-4xl font-bold text-gray-900 mb-1">${(user?.balance || 0).toFixed(2)}</div>
+              <div className="text-4xl font-bold text-gray-900 mb-1">${(user?.depositAmount || 0).toFixed(2)}</div>
               <p className="text-xs text-gray-500">Available funds</p>
             </div>
 
             {/* Total Deposits */}
             <div className="bg-white rounded-2xl p-8 shadow-lg hover:shadow-xl transition border-l-4 border-green-500">
               <div className="text-gray-600 text-sm font-semibold mb-2">Total Deposits</div>
-              <div className="text-4xl font-bold text-gray-900 mb-1">${stats.deposits.toFixed(2)}</div>
+              <div className="text-4xl font-bold text-gray-900 mb-1">${user?.depositAmount?.toLocaleString()}</div>
               <p className="text-xs text-gray-500">Amount deposited</p>
             </div>
 
@@ -137,7 +117,7 @@ export default function FinancesPage() {
             {/* Total Earnings */}
             <div className="bg-white rounded-2xl p-8 shadow-lg hover:shadow-xl transition border-l-4 border-cyan-500">
               <div className="text-gray-600 text-sm font-semibold mb-2">Total Earnings</div>
-              <div className="text-4xl font-bold text-gray-900 mb-1">${stats.earnings.toFixed(2)}</div>
+              <div className="text-4xl font-bold text-gray-900 mb-1">${user.earnings?.toFixed(2)}</div>
               <p className="text-xs text-gray-500">Commissions earned</p>
             </div>
           </div>

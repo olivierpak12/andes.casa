@@ -9,40 +9,40 @@ const TeamPage = () => {
   const { data: session } = useSession()
 
   return (
-    <div className="font-montserrat text-gray-800 overflow-hidden bg-gradient-to-br from-green-400 to-blue-500 min-h-screen flex items-center justify-center">
-      <div className="w-full max-w-md h-full min-h-screen flex flex-col">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-green-400 to-cyan-400 pt-4 px-4 pb-6">
-          <div className="flex items-center justify-between mb-4">
-            <Link href="/profile" className="text-2xl text-white hover:opacity-80">←</Link>
-            <div className="text-center font-semibold text-gray-800 text-lg">Team report</div>
-            <div className="w-6"></div>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-auto px-4 py-6 pb-28">
-          {/* Team Report - Main Focus */}
-          <TeamReport />
-
-          {/* Invite Section */}
-          <div className="mt-8">
-            <h3 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider">Invite New Members</h3>
-            <InviteCard userId={(session as any)?.user?.id ?? undefined} code={(session as any)?.user?.invitationCode ?? '2896064'} />
-          </div>
-        </div>
-
-        {/* Bottom Nav */}
-        <nav className="fixed bottom-4 left-0 right-0 flex items-center justify-center pointer-events-none">
-          <div className="w-full max-w-md flex items-center justify-between px-6 pointer-events-auto">
-            <Link href="/dashboard" className="flex-1 text-center text-white/90 bg-white/20 rounded-full py-2 text-sm">Home</Link>
-            <div className="-mt-6">
-              <Link href="/joining-process" className="inline-flex items-center justify-center w-16 h-16 bg-white text-cyan-700 rounded-full shadow-lg font-bold ring-4 ring-white">●</Link>
+    <div className="min-h-screen bg-gray-50 font-montserrat text-gray-800">
+      {/* Header: consistent, sticky, simple */}
+      <header className="sticky top-0 bg-white border-b border-gray-200 z-10">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div>
+              <Link href="/profile" className="inline-flex items-center text-gray-700 hover:opacity-80">← Back</Link>
             </div>
-            <Link href="/transactions" className="flex-1 text-center text-white/90 bg-white/20 rounded-full py-2 text-sm">Transactions</Link>
+            <div className="text-center flex-1">
+              <h1 className="text-lg font-semibold text-gray-900">Team report</h1>
+            </div>
+            <div className="w-10" />
           </div>
-        </nav>
-      </div>
+        </div>
+      </header>
+
+      {/* Main content container */}
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Responsive grid: main report + invite card on the side */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="md:col-span-2">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6">
+              <TeamReport />
+            </div>
+          </div>
+
+          <aside className="md:col-span-1">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-6 sticky top-20">
+              <h3 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider">Invite New Members</h3>
+              <InviteCard userId={(session as any)?.user?.id ?? undefined} code={(session as any)?.user?.invitationCode ?? '2896064'} />
+            </div>
+          </aside>
+        </div>
+      </main>
     </div>
   )
 }

@@ -5,7 +5,7 @@ import React from 'react'
 
 export default function BottomNav(){
   return (
-    <nav className="fixed bottom-4 left-0 right-0 flex items-center justify-center z-50 pointer-events-none">
+    <nav className="fixed bottom-4 left-0 right-0 flex items-center justify-center z-50 pointer-events-none md:hidden">
       <div className="w-full max-w-md flex items-center justify-between px-6 bg-transparent pointer-events-auto">
         <Link href="/" className="flex-1 text-center text-gray-600 bg-white/80 rounded-full py-2 shadow-md hover:opacity-95">Home</Link>
         <div className="-mt-6">

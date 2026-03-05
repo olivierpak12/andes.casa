@@ -3,7 +3,8 @@ import { mutation, query } from "./_generated/server";
 
 /**
  * Request a withdrawal
- * Creates a pending transaction and checks balance
+ * Creates a pending transaction and checks balance ONLY
+ * Does NOT deduct balance - deduction happens on completion
  */
 export const requestWithdrawal = mutation({
   args: {
@@ -24,18 +25,14 @@ export const requestWithdrawal = mutation({
       throw new Error("User not found");
     }
 
-    const currentBalance = user.balance || 0;
-
-    if (currentBalance < args.amount) {
-      throw new Error("Insufficient balance");
+    // Check withdrawable amount: only earnings are withdrawable (deposits are not)
+    const userEarnings = user.earnings || 0;
+    if (userEarnings < args.amount) {
+      throw new Error(`Insufficient withdrawable earnings. Available: ${userEarnings} USDT, Requested: ${args.amount} USDT`);
     }
 
-    // Deduct balance immediately to prevent double spending
-    await ctx.db.patch(args.userId, {
-      balance: currentBalance - args.amount,
-    });
-
-    // Create pending withdrawal transaction
+    // Create pending withdrawal transaction WITHOUT deducting balance yet
+    // Balance will be deducted only when withdrawal completes successfully
     const transactionId = await ctx.db.insert("transaction", {
       userId: args.userId,
       type: "withdrawal",
@@ -53,7 +50,7 @@ export const requestWithdrawal = mutation({
 
 /**
  * Complete a withdrawal (update status)
- * If failed, refund the amount to user
+ * Deducts balance on success, refunds on failure
  */
 export const completeWithdrawal = mutation({
   args: {
@@ -80,22 +77,27 @@ export const completeWithdrawal = mutation({
       throw new Error("Transaction is already processed");
     }
 
+    const user = await ctx.db.get(transaction.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Handle successful withdrawal
+    if (args.status === "completed") {
+      const userEarnings = user.earnings || 0;
+      // Deduct the withdrawal amount from earnings only
+      await ctx.db.patch(transaction.userId, {
+        earnings: Math.max(0, userEarnings - transaction.amount),
+      });
+    }
+    // If failed, refund the user (no refund needed since we didn't deduct)
+    // Just mark as failed and user balance remains unchanged
+
     await ctx.db.patch(args.transactionId, {
       status: args.status,
       transactionHash: args.transactionHash,
       updatedAt: Date.now(),
     });
-
-    // If failed, refund the user
-    if (args.status === "failed") {
-      const user = await ctx.db.get(transaction.userId);
-      if (user) {
-        const currentBalance = user.balance || 0;
-        await ctx.db.patch(transaction.userId, {
-          balance: currentBalance + transaction.amount,
-        });
-      }
-    }
 
     return args.status;
   },

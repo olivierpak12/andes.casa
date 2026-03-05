@@ -6,6 +6,30 @@ export default async function Home() {
   return (
     <div className="font-montserrat text-gray-800 overflow-x-hidden">
       {/* Navigation */}
+      <nav className="absolute top-6 left-0 right-0 z-30">
+        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
+          <Link href="/" className="text-white font-bold text-xl tracking-wider">
+            ANDES
+          </Link>
+          <div className="flex items-center gap-4">
+            <Link href="/dashboard" className="text-white/90 hover:text-white">
+              Dashboard
+            </Link>
+            <Link
+              href="/sign-in"
+              className="px-4 py-2 bg-white text-cyan-600 rounded-full font-semibold shadow"
+            >
+              Sign In
+            </Link>
+            <Link
+              href="/register"
+              className="px-4 py-2 border border-white text-white rounded-full hover:bg-white/10"
+            >
+              Create Account
+            </Link>
+          </div>
+        </div>
+      </nav>
 
       {/* Hero Section */}
       <section
@@ -14,7 +38,7 @@ export default async function Home() {
       >
         {/* Background Pattern */}
         <div
-          className="absolute inset-0 opacity-30"
+          className="absolute inset-0 opacity-30 pointer-events-none"
           style={{
             backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100' height='100' fill='none'/%3E%3Ccircle cx='50' cy='50' r='1' fill='white' opacity='0.3'/%3E%3C/svg%3E")`,
             backgroundSize: '50px 50px',
@@ -22,7 +46,7 @@ export default async function Home() {
         />
 
         {/* Background Image */}
-        <div className="absolute inset-0 w-full h-full">
+        <div className="absolute inset-0 w-full h-full pointer-events-none">
           <Image
             src="/SmartScooterTechnology.png"
             alt="Person riding electric scooter"
@@ -33,7 +57,7 @@ export default async function Home() {
         </div>
 
         {/* Overlay */}
-        <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/70 to-blue-900/80" />
+        <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/70 to-blue-900/80 pointer-events-none" />
 
         {/* Content */}
         <div className="relative z-10 max-w-4xl px-8">

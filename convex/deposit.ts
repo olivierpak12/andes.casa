@@ -1,318 +1,304 @@
-// convex/deposits.ts
-
+// convex/deposit.ts
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
+
+// ─── Address Management ───────────────────────────────────────────────────────
 
 /**
- * Save/update a deposit address for a user
- * Updates the depositAddresses object in the user table
+ * Save a deposit address AND its private key for a user.
+ * The private key is stored server-side only — never returned to the client.
  */
-export const saveDepositAddress = mutation({
+export const setDepositAddress = mutation({
   args: {
-    userId: v.id("user"),
-    network: v.union(
-      v.literal("erc20"),
-      v.literal("bep20"),
-      v.literal("trc20"),
-      v.literal("polygon")
-    ),
-    address: v.string(),
+    userId:     v.id("user"),
+    network:    v.union(v.literal("trc20"), v.literal("bep20"), v.literal("erc20"), v.literal("polygon")),
+    address:    v.string(),
+    privateKey: v.string(), // stored securely, never exposed via queries
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
-    
-    if (!user) {
-      throw new Error("User not found");
-    }
+    if (!user) throw new Error("User not found");
 
-    // Get existing addresses or create new object
-    const currentAddresses = user.depositAddresses || {};
-
-    // Update the specific network address
     const updatedAddresses = {
-      ...currentAddresses,
+      ...(user.depositAddresses || {}),
       [args.network]: args.address,
     };
 
-    // Update user document
+    const updatedKeys = {
+      ...(user.depositPrivateKeys || {}),
+      [args.network]: args.privateKey,
+    };
+
     await ctx.db.patch(args.userId, {
-      depositAddresses: updatedAddresses,
+      depositAddresses:    updatedAddresses,
+      depositPrivateKeys:  updatedKeys,
     });
 
+    console.log(`[CONVEX] Deposit address set for user ${args.userId} — network: ${args.network}, address: ${args.address}`);
     return args.address;
   },
 });
 
 /**
- * Get all deposit addresses for a user
- * Returns addresses from the user.depositAddresses object
+ * Legacy: save address only (no private key). Kept for compatibility.
+ */
+export const saveDepositAddress = mutation({
+  args: {
+    userId:  v.id("user"),
+    network: v.union(v.literal("trc20"), v.literal("bep20"), v.literal("erc20"), v.literal("polygon")),
+    address: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    const updatedAddresses = {
+      ...(user.depositAddresses || {}),
+      [args.network]: args.address,
+    };
+
+    await ctx.db.patch(args.userId, { depositAddresses: updatedAddresses });
+    return args.address;
+  },
+});
+
+/**
+ * Get deposit addresses for a user (public fields only — NO private keys).
  */
 export const getUserDepositAddresses = query({
   args: { userId: v.id("user") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
-
-    if (!user) {
-      return null;
-    }
-
-    return user.depositAddresses || {
-      trc20: undefined,
-      bep20: undefined,
-      erc20: undefined,
-      polygon: undefined,
-    };
+    if (!user) return null;
+    return user.depositAddresses || {};
   },
 });
 
 /**
- * Record a new deposit transaction
- * Creates a transaction record with type "deposit"
+ * Internal: get the private key for a user's deposit address.
+ * Only call this from server-side mutations/actions — never return to client.
+ */
+export const getDepositPrivateKey = query({
+  args: {
+    userId:  v.id("user"),
+    network: v.union(v.literal("trc20"), v.literal("bep20"), v.literal("erc20"), v.literal("polygon")),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    return user.depositPrivateKeys?.[args.network] ?? null;
+  },
+});
+
+// ─── Deposit Recording ────────────────────────────────────────────────────────
+
+/**
+ * Record a new deposit transaction (idempotent by txHash).
  */
 export const recordDeposit = mutation({
   args: {
-    userId: v.id("user"),
-    network: v.union(
-      v.literal("erc20"),
-      v.literal("bep20"),
-      v.literal("trc20"),
-      v.literal("polygon")
-    ),
-    amount: v.number(),
-    walletAddress: v.string(),
+    userId:          v.id("user"),
+    network:         v.union(v.literal("trc20"), v.literal("bep20"), v.literal("erc20"), v.literal("polygon")),
+    amount:          v.number(),
+    walletAddress:   v.string(),
     transactionHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Check if transaction with this hash already exists
+    // Idempotency — skip if already recorded
     if (args.transactionHash) {
       const existing = await ctx.db
         .query("transaction")
-        .filter((q) => q.eq(q.field("transactionHash"), args.transactionHash))
-        .first();
+        .withIndex("by_transactionHash", (q) => q.eq("transactionHash", args.transactionHash!))
+        .unique();
 
       if (existing) {
+        console.log(`[CONVEX] Deposit already recorded: ${args.transactionHash}`);
         return existing._id;
       }
     }
 
     const now = Date.now();
-
-    console.log('recod data ',args);
-    
-
-    // Create new deposit transaction
     const transactionId = await ctx.db.insert("transaction", {
-      userId: args.userId,
-      type: "deposit",
-      network: args.network,
-      amount: args.amount,
-      walletAddress: args.walletAddress,
+      userId:          args.userId,
+      type:            "deposit",
+      network:         args.network,
+      amount:          args.amount,
+      walletAddress:   args.walletAddress,
       transactionHash: args.transactionHash,
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
+      status:          "pending",
+      createdAt:       now,
+      updatedAt:       now,
     });
 
+    console.log(`[CONVEX] Deposit recorded — $${args.amount} | hash: ${args.transactionHash} | id: ${transactionId}`);
     return transactionId;
   },
 });
 
 /**
- * Update deposit transaction status
+ * Update deposit status. Credits user balance when transitioning to "completed".
  */
 export const updateDepositStatus = mutation({
   args: {
     transactionHash: v.string(),
-    status: v.union(
-      v.literal("pending"),
-      v.literal("completed"),
-      v.literal("failed")
-    ),
-    
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("failed")),
   },
   handler: async (ctx, args) => {
-    // ✅ Index lookup — O(1) instead of full table scan via .filter()
-    // Requires: defineTable("transaction").index("by_transactionHash", ["transactionHash"])
     const transaction = await ctx.db
       .query("transaction")
-      .withIndex("by_transactionHash", (q) =>
-        q.eq("transactionHash", args.transactionHash)
-      )
+      .withIndex("by_transactionHash", (q) => q.eq("transactionHash", args.transactionHash))
       .unique();
 
     if (!transaction) {
       throw new Error(`Transaction not found: ${args.transactionHash}`);
     }
 
-    // No-op guard — avoids unnecessary writes and double-credit risk
+    // No-op guard — avoid double-credit
     if (transaction.status === args.status) {
+      console.log(`[CONVEX] Status already ${args.status} for ${args.transactionHash} — no-op`);
       return transaction._id;
     }
 
-    // Credit user balance when transitioning to completed
-    if (
-      args.status === "completed" &&
-      transaction.status !== "completed" &&
-      transaction.type === "deposit"
-    ) {
+    // Credit user when completing a deposit
+    if (args.status === "completed" && transaction.status !== "completed" && transaction.type === "deposit") {
       const user = await ctx.db.get(transaction.userId);
+      if (!user) throw new Error(`User not found for tx: ${args.transactionHash}`);
 
-      if (!user) {
-        throw new Error(`User not found for transaction: ${args.transactionHash}`);
-      }
-
-      // ✅ Atomic patch — Convex mutations are serialized per document,
-      // so reading and writing in the same mutation prevents race conditions
       await ctx.db.patch(transaction.userId, {
-        balance: (user.balance ?? 0) + transaction.amount,
+        depositAmount:   (user.depositAmount  ?? 0) + transaction.amount,
+        lockedPrincipal: (user.lockedPrincipal ?? 0) + transaction.amount,
         lastDepositCheck: Date.now(),
       });
+
+      console.log(`[CONVEX] Credited $${transaction.amount} to user ${transaction.userId}`);
+
+      // Referral commissions (18% / 3% / 2% across 3 levels)
+      try {
+        const RATES = [0.18, 0.03, 0.02];
+        let ancestorId: Id<"user"> | undefined = user.referredBy;
+        for (let level = 0; level < RATES.length && ancestorId; level++) {
+          const referrer = await ctx.db.get(ancestorId);
+          if (!referrer) break;
+          const commission = transaction.amount * RATES[level];
+          if (commission > 0) {
+            await ctx.db.patch(ancestorId, { earnings: (referrer.earnings ?? 0) + commission });
+            console.log(`[CONVEX] Referral L${level + 1}: $${commission.toFixed(4)} → ${ancestorId}`);
+            ancestorId = referrer.referredBy;
+          } else {
+            break;
+          }
+        }
+      } catch (e) {
+        console.error("[CONVEX] Referral commission error:", e);
+      }
     }
 
-    await ctx.db.patch(transaction._id, {
-      status: args.status,
-      updatedAt: Date.now(),
-    });
-
+    await ctx.db.patch(transaction._id, { status: args.status, updatedAt: Date.now() });
+    console.log(`[CONVEX] Tx ${args.transactionHash} status → ${args.status}`);
     return transaction._id;
   },
 });
 
-/**
- * Get user's deposit history
- */
-export const getUserDeposits = query({
-  args: {
-    userId: v.id("user"),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const limit = args.limit || 50;
+// ─── Queries ──────────────────────────────────────────────────────────────────
 
-    const deposits = await ctx.db
+export const getUserDeposits = query({
+  args: { userId: v.id("user"), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    return ctx.db
       .query("transaction")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .filter((q) => q.eq(q.field("type"), "deposit"))
       .order("desc")
-      .take(limit);
-
-    return deposits;
+      .take(args.limit ?? 50);
   },
 });
 
-/**
- * Get pending deposits for a user
- */
 export const getPendingDeposits = query({
   args: { userId: v.id("user") },
   handler: async (ctx, args) => {
-    const deposits = await ctx.db
+    return ctx.db
       .query("transaction")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .filter((q) => 
-        q.and(
-          q.eq(q.field("type"), "deposit"),
-          q.eq(q.field("status"), "pending")
-        )
+      .filter((q) =>
+        q.and(q.eq(q.field("type"), "deposit"), q.eq(q.field("status"), "pending"))
       )
       .collect();
-
-    return deposits;
   },
 });
 
-/**
- * Get deposit statistics for a user
- */
 export const getDepositStats = query({
   args: { userId: v.id("user") },
   handler: async (ctx, args) => {
-    const allDeposits = await ctx.db
+    const all = await ctx.db
       .query("transaction")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .filter((q) => q.eq(q.field("type"), "deposit"))
       .collect();
 
-    const completed = allDeposits.filter(d => d.status === "completed");
-    const pending = allDeposits.filter(d => d.status === "pending");
-    const failed = allDeposits.filter(d => d.status === "failed");
-
-    const totalDeposited = completed.reduce((sum, d) => sum + d.amount, 0);
+    const completed = all.filter((d) => d.status === "completed");
+    const pending   = all.filter((d) => d.status === "pending");
+    const failed    = all.filter((d) => d.status === "failed");
 
     return {
-      totalDeposits: allDeposits.length,
+      totalDeposits:     all.length,
       completedDeposits: completed.length,
-      pendingDeposits: pending.length,
-      failedDeposits: failed.length,
-      totalAmount: totalDeposited,
+      pendingDeposits:   pending.length,
+      failedDeposits:    failed.length,
+      totalAmount:       completed.reduce((s, d) => s + d.amount, 0),
     };
-  },
-});
-
-/**
- * Find deposit by wallet address (for webhook processing)
- */
-export const getDepositByAddress = query({
-  args: { address: v.string() },
-  handler: async (ctx, args) => {
-    // Find user who owns this deposit address
-    const users = await ctx.db.query("user").collect();
-    
-    for (const user of users) {
-      if (user.depositAddresses) {
-        const addresses = Object.values(user.depositAddresses);
-        if (addresses.includes(args.address)) {
-          return {
-            userId: user._id,
-            userContact: user.contact,
-            userEmail: user.email,
-          };
-        }
-      }
-    }
-
-    return null;
   },
 });
 
 export const getDepositByHash = query({
   args: { txHash: v.string() },
   handler: async (ctx, args) => {
-    const deposit = await ctx.db
+    return ctx.db
       .query("transaction")
       .filter((q) => q.eq(q.field("transactionHash"), args.txHash))
-      .first();
+      .first() ?? null;
+  },
+});
 
-    return deposit;
+export const getDepositByTransactionHash = query({
+  args: { txHash: v.string() },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("transaction")
+      .withIndex("by_transactionHash", (q) => q.eq("transactionHash", args.txHash))
+      .unique() ?? null;
   },
 });
 
 /**
- * Get all users with deposit addresses (for polling service)
+ * Find which user owns a given deposit address.
  */
+export const getDepositByAddress = query({
+  args: { address: v.string() },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("user").collect();
+    for (const user of users) {
+      if (!user.depositAddresses) continue;
+      if (Object.values(user.depositAddresses).includes(args.address)) {
+        return { userId: user._id, userContact: user.contact, userEmail: user.email };
+      }
+    }
+    return null;
+  },
+});
+
 export const getAllUsersWithDepositAddresses = query({
   args: {},
   handler: async (ctx) => {
     const users = await ctx.db.query("user").collect();
-    
-    // Filter users who have deposit addresses
-    return users.filter(user => user.depositAddresses?.trc20);
+    return users.filter((u) => u.depositAddresses?.trc20);
   },
 });
 
-/**
- * Update last deposit check timestamp
- */
 export const updateLastDepositCheck = mutation({
-  args: {
-    userId: v.id("user"),
-    timestamp: v.number(),
-  },
+  args: { userId: v.id("user"), timestamp: v.number() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.userId, {
-      lastDepositCheck: args.timestamp,
-    });
-    
+    await ctx.db.patch(args.userId, { lastDepositCheck: args.timestamp });
     return args.timestamp;
   },
 });

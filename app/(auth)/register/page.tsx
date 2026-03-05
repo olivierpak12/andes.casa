@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { useAction, useQuery } from 'convex/react';
+import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import SupportChat from "@/components/SupportChat";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { ALLOWED_COUNTRY_CODES } from "@/constants/countryCodes";
+import { parsePhoneNumberFromString } from 'libphonenumber-js';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -24,6 +26,43 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedPin, setGeneratedPin] = useState<string>("");
+  const [locationCountry, setLocationCountry] = useState<string | null>(null);
+  const [phoneCountryDetected, setPhoneCountryDetected] = useState<string | null>(null);
+  const [locationMismatch, setLocationMismatch] = useState<boolean | null>(null);
+
+  // Browser geolocation + reverse geocoding helpers
+  const reverseGeocode = async (lat: number, lon: number) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`
+      );
+      if (!res.ok) return null;
+      const json = await res.json();
+      const cc = json?.address?.country_code;
+      return cc ? cc.toUpperCase() : null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const getCurrentPositionAsync = () =>
+    new Promise<GeolocationPosition>((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 })
+    );
+
+  React.useEffect(() => {
+    (async () => {
+      if (typeof window !== "undefined" && 'geolocation' in navigator) {
+        try {
+          const pos = await getCurrentPositionAsync();
+          const cc = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          if (cc) setLocationCountry(cc);
+        } catch (err) {
+          // ignore; we'll fallback to IP lookup on submit
+        }
+      }
+    })();
+  }, []);
 
   React.useEffect(() => {
     // Generate random 7-digit PIN on component mount
@@ -36,15 +75,24 @@ export default function RegisterPage() {
   const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
   const [confirmValid, setConfirmValid] = useState<boolean | null>(null);
   const [txPasswordValid, setTxPasswordValid] = useState<boolean | null>(null);
+  const [emailValid, setEmailValid] = useState<boolean | null>(null);
 
-  // Use Convex action to register users (requires Convex dev/service running)
-  const registerUser = useAction(api.user.registerUser);
+  // Use Convex mutation to register users (requires Convex dev/service running)
+  const registerUser = useMutation(api.user.registerUser);
   // const user = useQuery(api.user.getUserByContact, { contact: phoneNumber });
 
   // Validation functions
   const validatePhone = (phone: string) => {
-    const isValid = phone.trim().length >= 7 && /^\d+$/.test(phone);
+    const raw = `${countryCode}${phone}`;
+    const parsed = parsePhoneNumberFromString(raw);
+    const isValid = parsed ? parsed.isValid() : false;
     setPhoneValid(isValid);
+    if (parsed && parsed.country) {
+      setPhoneCountryDetected(parsed.country);
+      if (locationCountry) {
+        setLocationMismatch(parsed.country !== locationCountry);
+      }
+    }
     return isValid;
   };
 
@@ -66,13 +114,98 @@ export default function RegisterPage() {
     return isValid;
   };
 
+  const validateEmail = (emailStr: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isValid = emailRegex.test(emailStr);
+    setEmailValid(isValid);
+    return isValid;
+  };
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
+    // Try to detect user's country: prefer browser geolocation (permission-based), fallback to IP
+    let detectedCountry: string | null = null;
+    if (!locationCountry) {
+      try {
+        const res = await fetch("https://ipapi.co/json");
+        if (res.ok) {
+          const json = await res.json();
+          detectedCountry = json?.country || null; // ISO 2-letter country code
+          setLocationCountry(detectedCountry);
+        }
+      } catch (err) {
+        // ignore
+      }
+
+      // If still no country from IP, try browser geolocation as last resort
+      if (!detectedCountry && typeof window !== "undefined" && 'geolocation' in navigator) {
+        try {
+          const pos = await getCurrentPositionAsync();
+          const cc = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          if (cc) setLocationCountry(cc);
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    // auto-detect country code from number if possible
+    if (phoneNumber) {
+      const auto = parsePhoneNumberFromString(`${countryCode}${phoneNumber}`);
+      if (auto && auto.countryCallingCode) {
+        const detected = `+${auto.countryCallingCode}`;
+        if (detected !== countryCode) {
+          setCountryCode(detected);
+        }
+        if (auto.country) {
+          setPhoneCountryDetected(auto.country);
+        }
+      }
+    }
+
+    // parse phone early for validation and auto-allow decisions
+    const parsed = phoneNumber ? parsePhoneNumberFromString(`${countryCode}${phoneNumber}`) : null;
+
     // Basic client-side validation
+    // ensure we actually know the browser location
+    if (!locationCountry) {
+      setError("Unable to detect your location. Please allow location access or check your network.");
+      return;
+    }
+    // verify code is in whitelist — but auto-allow if parsed phone country matches detected location
+    if (!ALLOWED_COUNTRY_CODES.includes(countryCode)) {
+      const phoneCountryMatchesLocation = parsed && parsed.country && locationCountry && parsed.country === locationCountry;
+      if (!phoneCountryMatchesLocation) {
+        setError("Country code not supported");
+        return;
+      }
+      // allow: add implied acceptance path when user's phone country matches detected location
+    }
     if (!validatePhone(phoneNumber)) {
       setError("Please enter a valid phone number.");
+      return;
+    }
+    // ensure number actually belongs to country
+    if (!parsed || parsed.countryCallingCode !== countryCode.replace('+','')) {
+      setError('Phone number does not match country code');
+      return;
+    }
+
+    // If we have both phone-country and detected IP country, set mismatch flag (non-blocking)
+    if (parsed && parsed.country && locationCountry) {
+      setPhoneCountryDetected(parsed.country);
+      setLocationMismatch(parsed.country !== locationCountry);
+    } else {
+      setLocationMismatch(null);
+    }
+
+    // Enforce that phone country matches detected IP country
+    if (locationMismatch === true) {
+      setError(
+        `Detected location ${locationCountry} does not match phone country ${phoneCountryDetected}. Please use a local phone number.`
+      );
       return;
     }
     if (!validatePassword(password)) {
@@ -87,6 +220,10 @@ export default function RegisterPage() {
       setError("Transaction password must be at least 6 characters.");
       return;
     }
+    if (!validateEmail(email)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -96,6 +233,7 @@ export default function RegisterPage() {
         password,
         confirmPassword: confirm,
         transactionPassword: txPassword,
+        email,
         invitationCode,
         telegram,
         contact,
@@ -198,8 +336,13 @@ export default function RegisterPage() {
             <div className="flex items-center gap-2">
               <select
                 value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value)}
-                className={`px-3 py-3 rounded border-2 bg-[#152a4a] text-white text-sm focus:outline-none min-w-[80px] ${
+                onChange={(e) => {
+                  const newCode = e.target.value;
+                  setCountryCode(newCode);
+                  // revalidate phone with new code
+                  if (phoneNumber) validatePhone(phoneNumber);
+                }}
+                className={`px-3 py-3 rounded border-2 bg-[#152a4a] text-white text-sm focus:outline-none min-w-20 ${
                   countryCode && countryCode !== ""
                     ? "border-green-500"
                     : "border-red-500"
@@ -447,19 +590,57 @@ export default function RegisterPage() {
               <input
                 value={phoneNumber}
                 onChange={(e) => {
-                  setPhoneNumber(e.target.value);
-                  validatePhone(e.target.value);
+                  const v = e.target.value;
+                  setPhoneNumber(v);
+                  validatePhone(v);
                 }}
                 placeholder="Please enter mobile phone number"
                 type="tel"
-                className={`flex-1 px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-red-400 text-sm focus:outline-none ${
+                className={`flex-1 px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-gray-500 text-sm focus:outline-none ${
                   phoneNumber && phoneValid === true
                     ? "border-green-500"
-                    : "border-red-500"
+                    : phoneNumber
+                    ? "border-red-500"
+                    : "border-gray-500"
                 }`}
               />
               <span className="text-red-500 font-bold text-lg">1</span>
+              {phoneValid === false && (
+                <p className="text-red-400 text-xs mt-1 absolute left-0 top-full">
+                  Enter a valid phone number.
+                </p>
+              )}
+              {locationMismatch === true && (
+                <p className="text-yellow-300 text-xs mt-1 absolute left-0 top-full">
+                  Detected location {locationCountry} does not match phone country {phoneCountryDetected}.
+                </p>
+              )}
             </div>
+          </div>
+
+          {/* Email Address */}
+          <div className="relative">
+            <input
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                validateEmail(e.target.value);
+              }}
+              placeholder="Please enter email address"
+              type="email"
+              className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-gray-500 text-sm focus:outline-none ${
+                email && emailValid === true
+                  ? "border-green-500"
+                  : email
+                  ? "border-red-500"
+                  : "border-gray-500"
+              }`}
+            />
+            {emailValid === false && (
+              <p className="text-red-400 text-xs mt-1">
+                Please enter a valid email address.
+              </p>
+            )}
           </div>
 
           {/* Step 2: Login Password */}
@@ -476,10 +657,12 @@ export default function RegisterPage() {
               }}
               placeholder="Please enter login password"
               type="password"
-              className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-red-400 text-sm focus:outline-none ${
+              className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-gray-500 text-sm focus:outline-none ${
                 password && passwordValid === true
                   ? "border-green-500"
-                  : "border-red-500"
+                  : password
+                  ? "border-red-500"
+                  : "border-gray-500"
               }`}
             />
             <span className="absolute right-4 top-3 text-red-500 font-bold text-lg">2</span>
@@ -498,9 +681,16 @@ export default function RegisterPage() {
               className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-gray-400 placeholder-gray-500 text-sm focus:outline-none ${
                 confirm && confirmValid === true
                   ? "border-green-500"
+                  : confirm
+                  ? "border-red-500"
                   : "border-gray-500"
               }`}
             />
+            {confirmValid === false && (
+              <p className="text-red-400 text-xs mt-1">
+                Passwords do not match.
+              </p>
+            )}
           </div>
 
           {/* Step 3: Payment Password */}
@@ -513,13 +703,20 @@ export default function RegisterPage() {
               }}
               placeholder="Please enter payment password"
               type="password"
-              className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-red-400 text-sm focus:outline-none ${
+              className={`w-full px-4 py-3 rounded border-2 bg-[#152a4a] text-white placeholder-gray-500 text-sm focus:outline-none ${
                 txPassword && txPasswordValid === true
                   ? "border-green-500"
-                  : "border-red-500"
+                  : txPassword
+                  ? "border-red-500"
+                  : "border-gray-500"
               }`}
             />
             <span className="absolute right-4 top-3 text-red-500 font-bold text-lg">3</span>
+            {txPasswordValid === false && (
+              <p className="text-red-400 text-xs mt-1">
+                Transaction password must be at least 6 characters.
+              </p>
+            )}
           </div>
 
           {/* PIN */}
@@ -543,7 +740,7 @@ export default function RegisterPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || locationMismatch === true}
             className="w-full bg-white text-[#1a3a5a] font-bold py-3 rounded hover:bg-gray-200 transition-colors duration-200 mt-6"
           >
             {loading ? "Registering..." : "Complete registration"}

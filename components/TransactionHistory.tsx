@@ -3,7 +3,11 @@
 import React, { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 
-export default function TransactionHistory() {
+interface TransactionHistoryProps {
+  limit?: number;
+}
+
+export default function TransactionHistory({ limit = 10 }: TransactionHistoryProps) {
   const { data: session } = useSession();
 
   useEffect(() => {
